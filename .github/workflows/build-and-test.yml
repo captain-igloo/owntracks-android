@@ -52,7 +52,10 @@ jobs:
               :app:assembleGmsDebugAndroidTest \
               :app:assembleOssDebugAndroidTest \
               :app:packageGmsDebugAndroidTest \
-              :app:packageOssDebugAndroidTest
+              :app:packageOssDebugAndroidTest \
+              lint \
+              app:createGmsDebugUnitTestCoverageReport
+
         env:
           KEYSTORE_PASSPHRASE: ${{ secrets.KEYSTORE_PASSPHRASE }}
 
@@ -64,8 +67,6 @@ jobs:
             project/app/build/outputs/apk/oss/release/app-oss-release.apk
             project/app/build/outputs/apk/gms/release/app-gms-release.apk
 
-      - name: Unit Test
-        run: ./project/gradlew -p project app:createGmsDebugUnitTestCoverageReport
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         with:
@@ -77,9 +78,6 @@ jobs:
         if: always()
         with:
           report_paths: "**/build/test-results/test*UnitTest/TEST-*.xml"
-
-      - name: Lint
-        run: ./project/gradlew -p project lint
 
       - name: Upload lint report
         uses: actions/upload-artifact@v3
@@ -135,13 +133,14 @@ jobs:
         with:
           api-level: ${{ matrix.android-api }}
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           profile: pixel_3a
           target: google_apis
           ram-size: 3096M
           disable-animations: true
           arch: x86_64
           sdcard-path-or-size: 1000M
+          emulator-build: 9322596
           script: echo "Generated AVD snapshot for caching."
 
       - name: Espresso Test
@@ -154,15 +153,23 @@ jobs:
             adb uninstall org.owntracks.android || echo "org.owntracks.android not installed"
             adb uninstall org.owntracks.android.test || echo "org.owntracks.android.test not installed"
             adb logcat -c
-            adb logcat > device.log &
-            ./project/gradlew -p project createGmsDebugCoverageReport --scan   -Pandroid.testInstrumentationRunnerArguments.annotation=org.owntracks.android.testutils.SmokeTest
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+            adb logcat > emulator.log & echo $! > logcat_file.pid
+            adb logcat "*:S MonitoringInstr:V AndroidJUnitRunner:V TestRequestBuilder:V TestExecutor:V TestRunner:V" --format=color & echo $! > logcat_console.pid
+
+            echo 0 > gradle.exit # Set a default exit code.
+            ./project/gradlew -p project createGmsDebugCoverageReport --scan --no-daemon -Pandroid.testInstrumentationRunnerArguments.annotation=org.owntracks.android.testutils.SmokeTest || echo $? > gradle.exit
+            # Stop capturing logcat output.
+            kill $(cat logcat_file.pid)    || echo "::warning file=.github/workflows/ci.yml::Logcat process $(cat logcat_file.pid) didn't exist."
+            kill $(cat logcat_console.pid) || echo "::warning file=.github/workflows/ci.yml::Logcat process $(cat logcat_console.pid) didn't exist."
+            exit $(cat gradle.exit)
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           profile: pixel_3a
           target: google_apis
           ram-size: 3096M
           disable-animations: true
           arch: x86_64
           sdcard-path-or-size: 1000M
+          emulator-build: 9322596
 
       - name: Upload logcat
         uses: actions/upload-artifact@v3
