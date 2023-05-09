@@ -47,6 +47,7 @@ import org.owntracks.android.location.LocationCallback;
 import org.owntracks.android.location.LocationProviderClient;
 import org.owntracks.android.location.LocationRequest;
 import org.owntracks.android.location.LocationResult;
+import org.owntracks.android.location.MotionDetector;
 import org.owntracks.android.location.geofencing.Geofence;
 import org.owntracks.android.location.geofencing.GeofencingClient;
 import org.owntracks.android.location.geofencing.GeofencingEvent;
@@ -163,6 +164,9 @@ public class BackgroundService extends LifecycleService implements ServiceBridge
     @Inject
     SimpleIdlingResource locationIdlingResource;
 
+    @Inject
+    MotionDetector motionDetector;
+
     @EntryPoint
     @InstallIn(SingletonComponent.class)
     interface ServiceEntrypoint {
@@ -250,6 +254,10 @@ public class BackgroundService extends LifecycleService implements ServiceBridge
                 this.lastLocationMessage = messageLocation;
                 geocoderProvider.resolve(messageLocation, this);
             }
+        });
+
+        motionDetector.getCurrentMotion().observe(this, location -> {
+            setupLocationRequest();
         });
     }
 
@@ -541,6 +549,7 @@ public class BackgroundService extends LifecycleService implements ServiceBridge
         Timber.v("location update received: tst:%s, acc:%s, lat:%s, lon:%s type:%s", location.getTime(), location.getAccuracy(), location.getLatitude(), location.getLongitude(), reportType);
 
         if (location.getTime() > locationRepo.getCurrentLocationTime()) {
+            motionDetector.onLocationChanged(location);
             locationProcessor.onLocationChanged(location, reportType);
         } else {
             Timber.v("Not re-sending message with same timestamp as last");
@@ -595,9 +604,14 @@ public class BackgroundService extends LifecycleService implements ServiceBridge
                 priority = LocationRequest.PRIORITY_LOW_POWER;
                 break;
             case SIGNIFICANT:
-                interval = Duration.ofSeconds(preferences.getLocatorInterval());
-                smallestDisplacement = (float) preferences.getLocatorDisplacement();
-                priority = LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY;
+                if (motionDetector.isMoving()) {
+                    interval = Duration.ofSeconds(preferences.getMoveModeLocatorInterval());
+                    priority = LocationRequest.PRIORITY_HIGH_ACCURACY;
+                } else {
+                    interval = Duration.ofSeconds(preferences.getLocatorInterval());
+                    smallestDisplacement = (float) preferences.getLocatorDisplacement();
+                    priority = LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY;
+                }
                 break;
             case MOVE:
                 interval = Duration.ofSeconds(preferences.getMoveModeLocatorInterval());
