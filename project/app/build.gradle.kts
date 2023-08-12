@@ -215,6 +215,9 @@ dependencies {
     implementation(libs.widgets.materialdrawer) { artifact { type = "aar" } }
     implementation(libs.widgets.materialize) { artifact { type = "aar" } }
 
+    implementation("com.github.sevar83:android-spatialite:2.0.1")
+    implementation("org.locationtech.jts:jts-core:1.19.0")
+
     // These Java EE libs are no longer included in JDKs, so we include explicitly
     kapt(libs.bundles.jaxb.annotation.processors)
 

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:keepScreenOn="true">
+
+        <include
+            android:id="@+id/appbar"
+            layout="@layout/appbar"
+        />
+
+        <ImageView
+            android:id="@+id/speed_limit_image"
+            android:layout_width="320dp"
+            android:layout_height="320dp"
+            android:src="@drawable/speed_limit_image"
+            android:layout_centerHorizontal="true"
+            android:layout_marginTop="5sp"
+            app:layout_constraintEnd_toEndOf="@+id/appbar"
+            app:layout_constraintStart_toStartOf="@+id/appbar"
+            app:layout_constraintTop_toBottomOf="@id/appbar"
+        />
+
+        <TextView
+            android:id="@+id/speed_limit_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OK"
+            android:textSize="80sp"
+            app:layout_constraintTop_toTopOf="@+id/speed_limit_image"
+            app:layout_constraintBottom_toBottomOf="@+id/speed_limit_image"
+            app:layout_constraintStart_toStartOf="@id/speed_limit_image"
+            app:layout_constraintEnd_toEndOf="@id/speed_limit_image"
+        />
+
+        <TextView
+            android:id="@+id/speed_limit_desc"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="32dp"
+            android:layout_marginRight="32dp"
+            android:layout_marginTop="16dp"
+            android:text="Speed limit only available in New Zealand"
+            android:textSize="20sp"
+            app:layout_constraintEnd_toEndOf="@id/speed_limit_image"
+            app:layout_constraintStart_toStartOf="@id/speed_limit_image"
+            app:layout_constraintTop_toBottomOf="@id/speed_limit_image" />
+
+        <TextView
+            android:id="@+id/current_speed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text=""
+            android:textSize="80sp"
+            app:layout_constraintStart_toStartOf="@id/speed_limit_desc"
+            app:layout_constraintEnd_toEndOf="@id/speed_limit_desc"
+            app:layout_constraintTop_toBottomOf="@id/speed_limit_desc"
+        />
+
+        <ImageView
+            android:id="@+id/police_grey_image"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_marginStart="32dp"
+            android:layout_marginTop="8dp"
+            android:src="@drawable/policegrey"
+            android:visibility="visible"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/current_speed" />
+
+        <ImageView
+            android:id="@+id/police_car_image"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_marginStart="32dp"
+            android:layout_marginTop="8dp"
+            android:src="@drawable/police_car"
+            android:visibility="invisible"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/current_speed" />
+
+        <ImageView
+            android:id="@+id/cameragrey"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_marginEnd="32dp"
+            android:layout_marginTop="8dp"
+            android:src="@drawable/cameragrey"
+            android:visibility="visible"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/current_speed" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</layout>

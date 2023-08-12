@@ -279,6 +279,7 @@ To allow this, please enable Location in the device settings."</string>
     <string name="title_activity_contacts">"Friends"</string>
     <string name="title_activity_map">"Map"</string>
     <string name="title_activity_preferences">"Preferences"</string>
+    <string name="title_activity_speed_limit">"Speed Limit"</string>
     <string name="title_activity_waypoint">"Waypoint"</string>
     <string name="title_activity_waypoints">"Waypoints"</string>
     <string name="title_activity_status">"Status"</string>
