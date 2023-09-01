@@ -4,13 +4,15 @@ import org.junit.Assert
 import org.junit.Test
 import org.owntracks.android.preferences.InMemoryPreferencesStore
 import org.owntracks.android.preferences.Preferences
+import org.owntracks.android.support.SimpleIdlingResource
 import org.owntracks.android.support.interfaces.ConfigurationIncompleteException
 
 class MqttConnectionConfigurationTest {
+    private val mockIdlingResource = SimpleIdlingResource("mock", true)
 
     @Test
     fun `MQTT Connection Configuration generates correct topics to subscribe to from single default subTopic`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.subTopic = "owntracks/+/+"
         val topics = preferences.toMqttConnectionConfiguration().topicsToSubscribeTo
         Assert.assertEquals(
@@ -18,7 +20,8 @@ class MqttConnectionConfigurationTest {
                 "owntracks/+/+",
                 "owntracks/+/+/event",
                 "owntracks/+/+/info",
-                "owntracks/+/+/waypoints"
+                "owntracks/+/+/waypoints",
+                "owntracks/+/+/cmd"
             ),
             topics
         )
@@ -26,7 +29,7 @@ class MqttConnectionConfigurationTest {
 
     @Test
     fun `MQTT Connection Configuration generates correct topics to subscribe to from single custom subTopic`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.subTopic = "othertopic/+/+"
         val topics = preferences.toMqttConnectionConfiguration().topicsToSubscribeTo
         Assert.assertEquals(
@@ -37,7 +40,7 @@ class MqttConnectionConfigurationTest {
 
     @Test
     fun `MQTT Connection Configuration generates correct topics to subscribe to from multiple subTopics`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.subTopic = "owntracks/+/+ othertopic/+"
         preferences.info = true
         val topics = preferences.toMqttConnectionConfiguration().topicsToSubscribeTo
@@ -52,7 +55,7 @@ class MqttConnectionConfigurationTest {
 
     @Test
     fun `MQTT Connection Configuration generates correct topics to subscribe to from multiple subTopics with info not requested`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.subTopic = "owntracks/+/+ othertopic/+"
         preferences.info = false
         val topics = preferences.toMqttConnectionConfiguration().topicsToSubscribeTo
@@ -67,7 +70,7 @@ class MqttConnectionConfigurationTest {
 
     @Test
     fun `MQTT Connection Configuration generates correct topics to subscribe to from wildcard topic`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.subTopic = "owntracks/#"
         val topics = preferences.toMqttConnectionConfiguration().topicsToSubscribeTo
         Assert.assertEquals(
@@ -78,7 +81,7 @@ class MqttConnectionConfigurationTest {
 
     @Test(expected = Test.None::class)
     fun `MQTT Connection Configuration validates config with valid hostname`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.host = "example.com"
         preferences.toMqttConnectionConfiguration()
             .validate()
@@ -86,7 +89,7 @@ class MqttConnectionConfigurationTest {
 
     @Test(expected = ConfigurationIncompleteException::class)
     fun `MQTT Connection Configuration does not validate config with missing hostname`() {
-        val preferences = Preferences(InMemoryPreferencesStore())
+        val preferences = Preferences(InMemoryPreferencesStore(), mockIdlingResource)
         preferences.toMqttConnectionConfiguration()
             .validate()
     }

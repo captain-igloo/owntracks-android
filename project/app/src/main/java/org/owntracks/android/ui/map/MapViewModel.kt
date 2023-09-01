@@ -17,13 +17,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.owntracks.android.data.repos.ContactsRepo
 import org.owntracks.android.data.repos.LocationRepo
-import org.owntracks.android.data.repos.WaypointsRepo
+import org.owntracks.android.data.waypoints.WaypointsRepo
 import org.owntracks.android.geocoding.GeocoderProvider
 import org.owntracks.android.location.LatLng
 import org.owntracks.android.location.toLatLng
 import org.owntracks.android.model.FusedContact
 import org.owntracks.android.model.messages.MessageClear
-import org.owntracks.android.model.messages.MessageLocation.Companion.REPORT_TYPE_USER
+import org.owntracks.android.model.messages.MessageLocation
 import org.owntracks.android.preferences.Preferences
 import org.owntracks.android.preferences.types.ConnectionMode
 import org.owntracks.android.preferences.types.MonitoringMode
@@ -164,9 +164,11 @@ class MapViewModel @Inject constructor(
     }
 
     fun sendLocation() {
-        currentLocation.value?.run {
-            Timber.d("Sending current location from user request: $this")
-            locationProcessor.onLocationChanged(this, REPORT_TYPE_USER)
+        viewModelScope.launch {
+            currentLocation.value?.run {
+                Timber.d("Sending current location from user request: $this")
+                locationProcessor.onLocationChanged(this, MessageLocation.ReportType.USER)
+            }
         }
     }
 

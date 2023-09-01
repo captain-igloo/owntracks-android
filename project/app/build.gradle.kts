@@ -1,16 +1,17 @@
+import kotlin.io.path.isRegularFile
+
 plugins {
     id("com.android.application")
     id("dagger.hilt.android.plugin")
     id("com.github.triplet.play")
     kotlin("android")
     kotlin("kapt")
-    id("io.objectbox")
+//    id("com.dicedmelon.gradle.jacoco-android") version "0.1.5"
 }
 
 apply<EspressoScreenshotsPlugin>()
 
-val googleMapsAPIKey = extra.get("google_maps_api_key")
-    ?.toString() ?: "PLACEHOLDER_API_KEY"
+val googleMapsAPIKey = extra.get("google_maps_api_key")?.toString() ?: "PLACEHOLDER_API_KEY"
 
 val gmsImplementation: Configuration by configurations.creating
 val numShards = System.getenv("CIRCLE_NODE_TOTAL") ?: "0"
@@ -28,24 +29,36 @@ android {
         versionCode = 20500000
         versionName = "2.5.0"
 
-        val locales = listOf("en", "de", "fr", "es", "ru", "ca", "pl", "cs", "ja", "pt", "zh", "da", "tr", "ko")
+        val localeCount = fileTree("src/main/res/")
+            .map {
+                it.toPath()
+            }.count { it.isRegularFile() && it.fileName.toString() == "strings.xml" }
         buildConfigField(
-            "String[]",
-            "TRANSLATION_ARRAY",
-            "new String[]{\"" + locales.joinToString("\",\"") + "\"}"
+            "int",
+            "TRANSLATION_COUNT",
+            localeCount.toString()
         )
-        resourceConfigurations.addAll(locales)
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         testInstrumentationRunnerArguments.putAll(
             mapOf(
-                "clearPackageData" to "true",
+                "clearPackageData" to "false",
                 "coverage" to "true",
                 "disableAnalytics" to "true",
-                "useTestStorageService" to "true",
+                "useTestStorageService" to "false",
                 "numShards" to numShards,
                 "shardIndex" to shardIndex
             )
         )
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments["room.schemaLocation"] = "$projectDir/schemas"
+            }
+        }
+    }
+
+    androidResources {
+        generateLocaleConfig = true
     }
 
     signingConfigs {
@@ -92,6 +105,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         dataBinding = true
         viewBinding = true
     }
@@ -100,7 +114,7 @@ android {
         addKtx = true
     }
 
-    packagingOptions {
+    packaging {
         resources.excludes.add("META-INF/*")
         jniLibs.useLegacyPackaging = false
     }
@@ -133,17 +147,18 @@ android {
             setExceptionFormat("full")
         }
         reports.junitXml.required.set(true)
-        reports.html.required.set(false)
+        reports.html.required.set(true)
+        outputs.upToDateWhen { false }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     flavorDimensions.add("locationProvider")
@@ -151,12 +166,19 @@ android {
         create("gms") {
             dimension = "locationProvider"
             dependencies {
-                gmsImplementation("com.google.android.gms:play-services-maps:18.1.0")
-                gmsImplementation("com.google.android.gms:play-services-location:21.0.1")
+                gmsImplementation(libs.gms.play.services.maps)
+                gmsImplementation(libs.play.services.location)
             }
         }
         create("oss") {
             dimension = "locationProvider"
+        }
+    }
+    playConfigs {
+        register("gms") {
+            enabled.set(true)
+            track.set("internal")
+            resolutionStrategy.set(com.github.triplet.gradle.androidpublisher.ResolutionStrategy.AUTO)
         }
     }
 }
@@ -167,18 +189,15 @@ kapt {
 }
 
 tasks.withType<Test> {
-    systemProperties["junit.jupiter.execution.parallel.enabled"] = true
-    systemProperties["junit.jupiter.execution.parallel.mode.default"] = "concurrent"
-    maxParallelForks = (
-        Runtime.getRuntime()
-            .availableProcessors() / 2
-        ).takeIf { it > 0 } ?: 1
+    systemProperties["junit.jupiter.execution.parallel.enabled"] = false
+    systemProperties["junit.jupiter.execution.parallel.mode.default"] = "same_thread"
+    systemProperties["junit.jupiter.execution.parallel.mode.classes.default"] = "concurrent"
+    maxParallelForks = 1
 }
 
-tasks.withType<JavaCompile>()
-    .configureEach {
-        options.isFork = true
-    }
+tasks.withType<JavaCompile>().configureEach {
+    options.isFork = true
+}
 
 dependencies {
     implementation(libs.bundles.kotlin)
@@ -206,6 +225,7 @@ dependencies {
     implementation(libs.apache.httpcore)
     implementation(libs.commons.codec)
     implementation(libs.androidx.room.runtime)
+    implementation(libs.bundles.objectbox.migration)
 
     // The BC version shipped under com.android is half-broken. Weird certificate issues etc.
     // To solve, we bring in our own version of BC
@@ -245,23 +265,7 @@ dependencies {
 }
 
 // Publishing
-val serviceAccountCredentials = file("owntracks-android-gcloud-creds.json")
-
+// Handled now in the android / playConfigs block
 play {
-    if (this@Build_gradle.serviceAccountCredentials.exists()) {
-        enabled.set(true)
-        serviceAccountCredentials.set(this@Build_gradle.serviceAccountCredentials)
-    } else {
-        enabled.set(false)
-    }
-    track.set("internal")
-
-    resolutionStrategy.set(com.github.triplet.gradle.androidpublisher.ResolutionStrategy.AUTO)
-}
-
-val codesTask = tasks.register<GetLatestVersionCodeMinusOne>("getLatestVersionCodeMinusOne") {
-    dependsOn("processGmsReleaseVersionCodes")
-
-    codes.set(file("build/intermediates/gpp/gmsRelease/available-version-codes.txt"))
-    outCode.set(file("build/intermediates/version-code-minus-one.txt"))
+    enabled.set(false)
 }

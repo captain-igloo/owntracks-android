@@ -2,6 +2,7 @@ package org.owntracks.android.ui.speedLimit
 
 import android.database.SQLException
 import android.location.Location
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -33,9 +34,12 @@ class SpeedLimitActivity: AppCompatActivity() {
 
     private var currentSpeedLimit: Int? = null
 
+    private var sirenSounded: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val mp = MediaPlayer.create(this, R.raw.siren)
         val dbUri = Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.nslr)
         val dbHelper = SpatialiteFileDbHelper(this, dbUri, "nslr.sqlite")
         try {
@@ -58,6 +62,7 @@ class SpeedLimitActivity: AppCompatActivity() {
             if (localLastShape == null || !localLastShape.intersects(point)) {
                 var speedLimitText = "OK"
                 var speedLimitDescText = "Speed limit only available in New Zealand"
+                var isVariable = 0;
                 val db = dbHelper.readableDatabase;
                 val cursor = db.rawQuery(getQuery(location), null)
                 if (cursor.count > 0) {
@@ -65,12 +70,16 @@ class SpeedLimitActivity: AppCompatActivity() {
                     currentSpeedLimit = cursor.getInt(cursor.getColumnIndexOrThrow("speed_limit"))
                     speedLimitText = currentSpeedLimit.toString()
                     speedLimitDescText = cursor.getString(cursor.getColumnIndexOrThrow("description"))
+                    isVariable = cursor.getInt(cursor.getColumnIndexOrThrow("variable"))
                     lastShape = WKTReader().read(cursor.getString(cursor.getColumnIndexOrThrow("shape")))
                     cursor.close()
                 }
                 val speedLimit = findViewById<TextView>(R.id.speed_limit_text)
-                speedLimit.text = speedLimitText
-                // speedLimit.text = "VAR"
+                if (isVariable == 1) {
+                    speedLimit.text = "VAR"
+                } else {
+                    speedLimit.text = speedLimitText
+                }
                 val speedLimitDesc = findViewById<TextView>(R.id.speed_limit_desc)
                 speedLimitDesc.text = speedLimitDescText
             }
@@ -79,8 +88,13 @@ class SpeedLimitActivity: AppCompatActivity() {
             val localCurrentSpeedLimit = currentSpeedLimit
             if (localCurrentSpeedLimit !== null && location.getSpeed() * 3.6 > localCurrentSpeedLimit) {
                 policeCar.visibility = View.VISIBLE
+                if (!sirenSounded) {
+                    mp.start();
+                    sirenSounded = true
+                }
             } else {
                 policeCar.visibility = View.INVISIBLE
+                sirenSounded = false
             }
         }
     }
@@ -101,6 +115,7 @@ class SpeedLimitActivity: AppCompatActivity() {
                 id,
                 description,
                 speed_limit,
+                variable,
                 ST_AsText(ST_Transform(shape, 4326)) AS shape
             FROM
                 nslr

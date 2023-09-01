@@ -1,7 +1,6 @@
 package org.owntracks.android.services
 
 import android.content.Context
-import android.util.Base64
 import java.net.URI
 import java.net.URISyntaxException
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
@@ -127,10 +126,16 @@ fun Preferences.toMqttConnectionConfiguration(): MqttConnectionConfiguration =
                     subTopic,
                     subTopic + infoTopicSuffix,
                     subTopic + eventTopicSuffix,
-                    subTopic + waypointsTopicSuffix
+                    subTopic + waypointsTopicSuffix,
+                    subTopic + commandTopicSuffix
                 )
             } else {
-                sortedSetOf(subTopic, subTopic + eventTopicSuffix, subTopic + waypointsTopicSuffix)
+                sortedSetOf(
+                    subTopic,
+                    subTopic + eventTopicSuffix,
+                    subTopic + waypointsTopicSuffix,
+                    subTopic + commandTopicSuffix
+                )
             }
         } else {
             sortedSetOf(subTopic)

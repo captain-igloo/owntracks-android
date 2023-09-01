@@ -1,7 +1,6 @@
 package org.owntracks.android.preferences
 
 import android.content.Context
-import org.intellij.lang.annotations.Language
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -13,11 +12,12 @@ import org.owntracks.android.preferences.types.MonitoringMode
 import org.owntracks.android.preferences.types.MqttProtocolLevel
 import org.owntracks.android.preferences.types.MqttQos
 import org.owntracks.android.support.Parser
-import org.owntracks.android.ui.map.MapLayerStyle
+import org.owntracks.android.support.SimpleIdlingResource
 
 class ImportExportTest {
     private lateinit var mockContext: Context
     private lateinit var preferencesStore: PreferencesStore
+    private val mockIdlingResource = SimpleIdlingResource("mock", true)
 
     @Before
     fun createMocks() {
@@ -27,7 +27,7 @@ class ImportExportTest {
 
     @Test
     fun `given a JSON configuration message, when importing it, then the preferences values are set to the same values`() {
-        @Language("JSON")
+        //language=JSON
         val input = """
             {
               "_type": "configuration",
@@ -88,7 +88,7 @@ class ImportExportTest {
               "ws": false
             }
         """.trimIndent()
-        val preferences = Preferences(preferencesStore)
+        val preferences = Preferences(preferencesStore, mockIdlingResource)
         val parser = Parser(null)
         preferences.importConfiguration(parser.fromJson(input) as MessageConfiguration)
         preferences.run {
@@ -131,7 +131,7 @@ class ImportExportTest {
 
     @Test
     fun `given a preferences instance, when exporting it, then the exported JSON message has the same values set`() {
-        val preferences = Preferences(preferencesStore)
+        val preferences = Preferences(preferencesStore, mockIdlingResource)
         preferences.run {
             autostartOnBoot = true
             cleanSession = false
@@ -171,6 +171,8 @@ class ImportExportTest {
         val message = preferences.exportToMessage()
         val parser = Parser(null)
         val json = parser.toUnencryptedJsonPretty(message)
+
+        //language=JSON
         val expected = """
             {
               "_type" : "configuration",

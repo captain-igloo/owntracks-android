@@ -41,7 +41,7 @@ class OpenCageGeocoder internal constructor(
             .addPathSegment("geocode")
             .addPathSegment("v1")
             .addPathSegment("json")
-            .addEncodedQueryParameter("q", String.format("%s,%s", latitude, longitude))
+            .addEncodedQueryParameter("q", String.format("$latitude,$longitude"))
             .addQueryParameter("no_annotations", "1")
             .addQueryParameter("abbrv", "1")
             .addQueryParameter("limit", "1")
@@ -84,7 +84,7 @@ class OpenCageGeocoder internal constructor(
                             402 -> {
                                 val deserializedOpenCageResponse =
                                     jsonMapper.readValue(responseBody, OpenCageResponse::class.java)
-                                Timber.d("Opencage HTTP response: %s", responseBody)
+                                Timber.d("Opencage HTTP response: $responseBody")
                                 Timber.w("Opencage quota exceeded")
                                 deserializedOpenCageResponse.rate?.let { rate ->
                                     Timber.w("Not retrying Opencage requests until ${rate.reset}")
@@ -112,7 +112,7 @@ class OpenCageGeocoder internal constructor(
                             else -> {
                                 tripResetTimestamp = Instant.now()
                                     .plus(1, ChronoUnit.MINUTES)
-                                Timber.e("Unexpected response from Opencage: %s", response)
+                                Timber.e("Unexpected response from Opencage: $response")
                                 GeocodeResult.Fault.Error(
                                     "status: ${response.code} $responseBody",
                                     tripResetTimestamp
@@ -144,11 +144,10 @@ class OpenCageGeocoder internal constructor(
     internal class OpenCageResponse {
         val rate: Rate? = null
 
-        @Suppress("MemberVisibilityCanBePrivate")
         val results: List<OpenCageResult>? = null
         val status: Status? = null
         val formatted: String?
-            get() = if (results != null && results.isNotEmpty()) results[0].formatted else null
+            get() = if (!results.isNullOrEmpty()) results[0].formatted else null
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

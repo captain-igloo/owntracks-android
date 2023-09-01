@@ -27,13 +27,13 @@ open class MessageLocation(private val dep: MessageWithCreatedAt = MessageCreate
     MessageBase(), MessageWithCreatedAt by dep {
 
     @JsonIgnore
-    override val numberOfRetries: Int = 10_080 // This should last a week at 1 attempt per minute
+    override val numberOfRetries: Int = 100_000 // This should last a few weeks at 1 attempt per minute
 
     @JsonProperty("t")
-    var trigger: String? = null
+    var trigger: ReportType = ReportType.DEFAULT
 
     @JsonProperty("batt")
-    var battery = 0
+    var battery: Int? = null
 
     @JsonProperty("bs")
     var batteryStatus: BatteryStatus? = null
@@ -116,9 +116,7 @@ open class MessageLocation(private val dep: MessageWithCreatedAt = MessageCreate
     }
 
     @JsonIgnore
-    override fun toString(): String {
-        return String.format("Location id=%s: (%s,%s)", this.messageId, latitude, longitude)
-    }
+    override fun toString(): String = "Location id=$messageId: ($latitude,$longitude) trigger=$trigger"
 
     override fun addMqttPreferences(preferences: Preferences) {
         topic = preferences.pubTopicLocations
@@ -161,16 +159,17 @@ open class MessageLocation(private val dep: MessageWithCreatedAt = MessageCreate
             }
 
         const val TYPE = "location"
-        const val REPORT_TYPE_USER = "u"
-        const val REPORT_TYPE_RESPONSE = "r"
-        const val REPORT_TYPE_CIRCULAR = "c"
-        const val REPORT_TYPE_PING = "p"
-
-        @JvmField
-        val REPORT_TYPE_DEFAULT: String? = null
         const val CONN_TYPE_OFFLINE = "o"
         const val CONN_TYPE_WIFI = "w"
         const val CONN_TYPE_MOBILE = "m"
+    }
+
+    enum class ReportType(@JsonValue val serialized: String) {
+        USER("u"), // Explicitly sent by the user
+        RESPONSE("r"), // Triggered by a remote reportLocation command
+        CIRCULAR("c"), // Region enter / leave event
+        PING("p"), // Issued by the periodic ping worker
+        DEFAULT("")
     }
 
     private fun Double.roundForDisplay(): String =

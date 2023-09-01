@@ -3,12 +3,17 @@ package org.owntracks.android.testutils
 import android.content.Intent
 import android.net.Uri
 import androidx.test.platform.app.InstrumentationRegistry
+import java.net.ConnectException
+import java.net.InetSocketAddress
+import java.net.Socket
+import kotlin.concurrent.thread
 import kotlinx.coroutines.DelicateCoroutinesApi
 import mqtt.broker.Broker
 import mqtt.broker.interfaces.Authentication
 import mqtt.broker.interfaces.PacketInterceptor
 import mqtt.packets.MQTTPacket
 import mqtt.packets.Qos
+import mqtt.packets.mqtt.MQTTPublish
 import mqtt.packets.mqttv5.MQTT5Properties
 import org.eclipse.paho.client.mqttv3.internal.websocket.Base64
 import org.owntracks.android.R
@@ -17,10 +22,6 @@ import org.owntracks.android.support.Parser
 import org.owntracks.android.ui.clickOnAndWait
 import org.owntracks.android.ui.preferences.load.LoadActivity
 import timber.log.Timber
-import java.net.ConnectException
-import java.net.InetSocketAddress
-import java.net.Socket
-import kotlin.concurrent.thread
 
 @ExperimentalUnsignedTypes
 class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
@@ -31,6 +32,7 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
     private val mqttTestPassword = "testPassword"
     override val mqttPacketsReceived: MutableList<MQTTPacket> = mutableListOf()
     override lateinit var broker: Broker
+    override val packetReceivedIdlingResource = LatchingIdlingResourceWithData("mqttPacketReceivedIdlingResource")
 
     override fun <E : MessageBase> Collection<E>.sendFromBroker(broker: Broker) {
         map(Parser(null)::toJsonBytes).forEach {
@@ -99,25 +101,38 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
                     password: UByteArray?,
                     packet: MQTTPacket
                 ) {
-                    Timber.d("MQTT Packet received $packet ${String(packet.toByteArray().toByteArray())}")
-                    mqttPacketsReceived.add(packet)
+                    synchronized(mqttPacketsReceived) {
+                        val packetString = String(packet.toByteArray().toByteArray())
+                        Timber.v("MQTT Packet received $packet $packetString")
+                        mqttPacketsReceived.add(packet)
+                        val magic = packetReceivedIdlingResource.data ?: ""
+                        if (packet is MQTTPublish && packetString.contains(magic)) {
+                            Timber.v("packet contains magic string $magic. Unlatching")
+                            packetReceivedIdlingResource.unlatch()
+                        }
+
+                        Timber.d("Total MQTT Packets received is ${mqttPacketsReceived.size}")
+                    }
                 }
             }
         )
 
     override fun stopBroker() {
-        shouldBeRunning = false
-        Timber.i("Requesting MQTT Broker stop")
-        if (this::broker.isInitialized) {
-            broker.stop()
+        if (::brokerThread.isInitialized) {
+            shouldBeRunning = false
+            Timber.i("Requesting MQTT Broker stop")
+            if (this::broker.isInitialized) {
+                broker.stop()
+            }
+            Timber.i("Waiting to join thread")
+            brokerThread.join()
+            Timber.i("MQTT Broker stopped")
         }
-        Timber.i("Waiting to join thread")
-        brokerThread.join()
-        Timber.i("MQTT Broker stopped")
     }
 
     override fun configureMQTTConnectionToLocal(password: String) {
         val config = Base64.encode(
+            //language=JSON
             """
             {
                 "_type": "configuration",
@@ -143,7 +158,7 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
         )
         waitUntilActivityVisible<LoadActivity>()
         val activity = getCurrentActivity() as LoadActivity
-        activity.importStatusIdlingResource.with {
+        activity.importStatusIdlingResource.use {
             clickOnAndWait(R.id.save)
         }
     }

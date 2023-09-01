@@ -14,7 +14,7 @@ import com.google.android.gms.maps.GoogleMap.*
 import com.google.android.gms.maps.GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE
 import com.google.android.gms.maps.model.*
 import org.owntracks.android.R
-import org.owntracks.android.data.WaypointModel
+import org.owntracks.android.data.waypoints.WaypointModel
 import org.owntracks.android.databinding.GoogleMapFragmentBinding
 import org.owntracks.android.gms.location.toGMSLatLng
 import org.owntracks.android.location.LatLng
@@ -42,7 +42,7 @@ class GoogleMapFragment internal constructor(
             override fun activate(
                 onLocationChangedListener: LocationSource.OnLocationChangedListener
             ) {
-                locationObserver = Observer<Location> { location ->
+                locationObserver = Observer { location ->
                     onLocationChangedListener.onLocationChanged(location)
                     viewModel.setCurrentBlueDotLocation(location.toLatLng())
                     if (viewModel.viewMode == MapViewModel.ViewMode.Device) {
@@ -257,7 +257,7 @@ class GoogleMapFragment internal constructor(
                     WaypointOnMap(
                         MarkerOptions().apply {
                             position(
-                                region.location.toLatLng()
+                                region.getLocation().toLatLng()
                                     .toGMSLatLng()
                             )
                             anchor(0.5f, 1.0f)
@@ -266,7 +266,7 @@ class GoogleMapFragment internal constructor(
                             .let { addMarker(it)!! },
                         CircleOptions().apply {
                             center(
-                                region.location.toLatLng()
+                                region.getLocation().toLatLng()
                                     .toGMSLatLng()
                             )
                             radius(region.geofenceRadius.toDouble())

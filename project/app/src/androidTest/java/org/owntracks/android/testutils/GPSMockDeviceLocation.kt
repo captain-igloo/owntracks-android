@@ -7,6 +7,7 @@ import android.location.LocationManager
 import android.os.SystemClock
 import androidx.core.location.LocationCompat
 import java.util.concurrent.TimeUnit
+import timber.log.Timber
 
 open class GPSMockDeviceLocation : MockDeviceLocation {
     private var locationManager: LocationManager? = null
@@ -15,15 +16,11 @@ open class GPSMockDeviceLocation : MockDeviceLocation {
         listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
 
     override fun initializeMockLocationProvider(context: Context) {
+        Timber.d("Initialize mock location Provider")
         this.locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         setPackageAsMockLocationProvider(context)
-
         locationManager?.run {
             locationProvidersToMock.forEach { provider ->
-                try {
-                    removeTestProvider(provider)
-                } catch (e: IllegalArgumentException) {
-                }
                 addTestProvider(
                     provider,
                     false,
@@ -33,25 +30,17 @@ open class GPSMockDeviceLocation : MockDeviceLocation {
                     true,
                     true,
                     true,
-                    Criteria.POWER_MEDIUM,
+                    Criteria.POWER_HIGH,
                     Criteria.ACCURACY_FINE
                 )
+                Timber.d("Enabling location Test Provider called $provider")
                 setTestProviderEnabled(provider, true)
             }
         }
     }
 
-    override fun unInitializeMockLocationProvider() {
-        locationProvidersToMock.forEach {
-            locationManager?.run {
-                setTestProviderEnabled(it, false)
-                removeTestProvider(it)
-            }
-        }
-    }
-
     override fun setMockLocation(latitude: Double, longitude: Double, accuracy: Float) {
-        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { provider ->
+        locationProvidersToMock.forEach { provider ->
             val location = Location(provider).apply {
                 this.latitude = latitude
                 this.longitude = longitude
@@ -64,7 +53,8 @@ open class GPSMockDeviceLocation : MockDeviceLocation {
                 LocationCompat.setBearingAccuracyDegrees(this, 0f)
                 LocationCompat.setSpeedAccuracyMetersPerSecond(this, 1f)
             }
-            locationManager?.setTestProviderLocation(
+            Timber.i("Setting mock GPS location for $provider to $location")
+            locationManager!!.setTestProviderLocation(
                 provider,
                 location
             )

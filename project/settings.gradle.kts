@@ -7,8 +7,9 @@ pluginManagement {
     resolutionStrategy {
         eachPlugin {
             when (requested.id.id) {
-                "dagger.hilt.android.plugin" -> useModule("com.google.dagger:hilt-android-gradle-plugin:${requested.version}")
-                "io.objectbox" -> useModule("io.objectbox:objectbox-gradle-plugin:${requested.version}")
+                "dagger.hilt.android.plugin" -> useModule(
+                    "com.google.dagger:hilt-android-gradle-plugin:${requested.version}"
+                )
             }
         }
     }
@@ -20,7 +21,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven("https://jitpack.io")
-        jcenter()
+        maven("https://s01.oss.sonatype.org/content/repositories/snapshots/")
     }
 }
 

@@ -16,7 +16,8 @@ class DeviceGeocoder internal constructor(context: Context) : CachingGeocoder() 
         return if (geocoderAvailable()) {
             super.reverse(latitude, longitude)
         } else {
-            tripResetTimestamp = Instant.now().plus(1, ChronoUnit.MINUTES)
+            tripResetTimestamp = Instant.now()
+                .plus(1, ChronoUnit.MINUTES)
             GeocodeResult.Fault.Unavailable(tripResetTimestamp)
         }
     }
@@ -28,8 +29,9 @@ class DeviceGeocoder internal constructor(context: Context) : CachingGeocoder() 
         }
         val addresses: List<Address>?
         return try {
+            @Suppress("DEPRECATION") // The non-deprecated version needs API 33
             addresses = geocoder.getFromLocation(latitude.toDouble(), longitude.toDouble(), 1)
-            if (addresses != null && addresses.isNotEmpty()) {
+            if (!addresses.isNullOrEmpty()) {
                 val g = StringBuilder()
                 val a = addresses[0]
                 if (a.getAddressLine(0) != null) g.append(a.getAddressLine(0))
@@ -39,7 +41,8 @@ class DeviceGeocoder internal constructor(context: Context) : CachingGeocoder() 
                 GeocodeResult.Empty
             }
         } catch (e: Exception) {
-            tripResetTimestamp = Instant.now().plus(1, ChronoUnit.MINUTES)
+            tripResetTimestamp = Instant.now()
+                .plus(1, ChronoUnit.MINUTES)
             GeocodeResult.Fault.Error(e.toString(), tripResetTimestamp)
         }
     }

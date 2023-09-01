@@ -1,6 +1,5 @@
 package org.owntracks.android.ui.map
 
-import android.Manifest
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.withId
@@ -12,12 +11,11 @@ import com.adevinta.android.barista.assertion.BaristaVisibilityAssertions.assert
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import com.adevinta.android.barista.interaction.BaristaDrawerInteractions.openDrawer
 import com.adevinta.android.barista.interaction.BaristaEditTextInteractions
-import com.adevinta.android.barista.interaction.PermissionGranter
-import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.owntracks.android.R
 import org.owntracks.android.testutils.*
+import org.owntracks.android.testutils.matchers.withActionIconDrawable
 import org.owntracks.android.ui.clickOnAndWait
 import org.owntracks.android.ui.clickOnDrawerAndWait
 
@@ -26,10 +24,6 @@ import org.owntracks.android.ui.clickOnDrawerAndWait
 class CommonMapActivityTests :
     TestWithAnActivity<MapActivity>(MapActivity::class.java, false),
     MockDeviceLocation by GPSMockDeviceLocation() {
-    @After
-    fun removeMockLocationProvider() {
-        unInitializeMockLocationProvider()
-    }
 
     @Test
     fun monitoringModeButtonShowsDialogAndAllowsUsToSelectQuietMode() {
@@ -126,7 +120,7 @@ class CommonMapActivityTests :
         launchActivity()
         grantMapActivityPermissions()
         initializeMockLocationProvider(app)
-        reportLocationFromMap(app.locationIdlingResource) {
+        reportLocationFromMap(app.mockLocationIdlingResource) {
             setMockLocation(51.0, 0.0)
         }
 

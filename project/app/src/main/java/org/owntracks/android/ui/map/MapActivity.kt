@@ -32,7 +32,6 @@ import androidx.databinding.BindingAdapter
 import androidx.databinding.DataBindingUtil
 import androidx.fragment.app.commit
 import androidx.lifecycle.lifecycleScope
-import androidx.test.espresso.IdlingResource
 import androidx.test.espresso.idling.CountingIdlingResource
 import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.bottomsheet.BottomSheetBehavior
@@ -42,6 +41,7 @@ import com.google.android.material.snackbar.Snackbar
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.EntryPointAccessors
 import javax.inject.Inject
+import javax.inject.Named
 import kotlinx.coroutines.launch
 import org.owntracks.android.R
 import org.owntracks.android.databinding.UiMapBinding
@@ -51,10 +51,11 @@ import org.owntracks.android.preferences.Preferences.Companion.EXPERIMENTAL_FEAT
 import org.owntracks.android.preferences.types.ConnectionMode
 import org.owntracks.android.preferences.types.MonitoringMode
 import org.owntracks.android.services.BackgroundService
-import org.owntracks.android.services.BackgroundService.BACKGROUND_LOCATION_RESTRICTION_NOTIFICATION_TAG
+import org.owntracks.android.services.BackgroundService.Companion.BACKGROUND_LOCATION_RESTRICTION_NOTIFICATION_TAG
 import org.owntracks.android.support.ContactImageBindingAdapter
 import org.owntracks.android.support.DrawerProvider
 import org.owntracks.android.support.RequirementsChecker
+import org.owntracks.android.support.SimpleIdlingResource
 import org.owntracks.android.ui.mixins.ActivityResultCallerWithLocationPermissionCallback
 import org.owntracks.android.ui.mixins.LocationPermissionRequester
 import org.owntracks.android.ui.mixins.ServiceStarter
@@ -87,7 +88,19 @@ class MapActivity :
     lateinit var contactImageBindingAdapter: ContactImageBindingAdapter
 
     @Inject
-    lateinit var countingIdlingResource: CountingIdlingResource
+    @Named("outgoingQueueIdlingResource")
+    @get:VisibleForTesting
+    lateinit var outgoingQueueIdlingResource: CountingIdlingResource
+
+    @Inject
+    @Named("publishResponseMessageIdlingResource")
+    @get:VisibleForTesting
+    lateinit var publishResponseMessageIdlingResource: SimpleIdlingResource
+
+    @Inject
+    @Named("importConfigurationIdlingResource")
+    @get:VisibleForTesting
+    lateinit var importConfigurationIdlingResource: SimpleIdlingResource
 
     @Inject
     lateinit var requirementsChecker: RequirementsChecker
@@ -285,7 +298,7 @@ class MapActivity :
      */
     private fun checkAndRequestLocationServicesEnabled(explicitUserAction: Boolean): Boolean {
         return if (!requirementsChecker.isLocationServiceEnabled()) {
-            Timber.d(Exception(), "Location Services disabled")
+            Timber.d("Location Services disabled")
             if ((explicitUserAction || !preferences.userDeclinedEnableLocationServices)) {
                 if (!this::locationServicesAlertDialog.isInitialized) {
                     locationServicesAlertDialog = MaterialAlertDialogBuilder(this).setCancelable(true)
@@ -616,10 +629,6 @@ class MapActivity :
         super.onStop()
         unbindService(serviceConnection)
     }
-
-    @get:VisibleForTesting
-    val outgoingQueueIdlingResource: IdlingResource
-        get() = countingIdlingResource
 
     companion object {
         const val BUNDLE_KEY_CONTACT_ID = "BUNDLE_KEY_CONTACT_ID"

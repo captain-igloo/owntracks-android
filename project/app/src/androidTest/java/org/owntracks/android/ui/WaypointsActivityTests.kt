@@ -10,11 +10,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.owntracks.android.R
 import org.owntracks.android.testutils.TestWithAnActivity
+import org.owntracks.android.testutils.TestWithAnMQTTBroker
+import org.owntracks.android.testutils.TestWithAnMQTTBrokerImpl
 import org.owntracks.android.ui.waypoints.WaypointsActivity
 
+@OptIn(ExperimentalUnsignedTypes::class)
 @LargeTest
 @RunWith(AndroidJUnit4::class)
-class WaypointsActivityTests : TestWithAnActivity<WaypointsActivity>(WaypointsActivity::class.java) {
+class WaypointsActivityTests :
+    TestWithAnActivity<WaypointsActivity>(WaypointsActivity::class.java),
+    TestWithAnMQTTBroker by TestWithAnMQTTBrokerImpl() {
     @Test
     fun initialRegionsActivityIsEmpty() {
         assertDisplayed(R.string.waypointListPlaceholder)
@@ -68,4 +73,9 @@ class WaypointsActivityTests : TestWithAnActivity<WaypointsActivity>(WaypointsAc
 
         assertNotDisplayed(waypointName)
     }
+
+//    @After
+//    fun mqttAfter() {
+//        stopBroker()
+//    }
 }

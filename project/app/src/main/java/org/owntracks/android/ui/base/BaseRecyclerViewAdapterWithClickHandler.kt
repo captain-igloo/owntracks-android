@@ -25,7 +25,10 @@ abstract class BaseRecyclerViewAdapterWithClickHandler<T, VH : BaseRecyclerViewH
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH = viewHolderConstructor(
         DataBindingUtil.inflate(
-            LayoutInflater.from(parent.context), viewHolderLayout, parent, false
+            LayoutInflater.from(parent.context),
+            viewHolderLayout,
+            parent,
+            false
         )
     )
 

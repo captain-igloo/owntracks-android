@@ -7,6 +7,7 @@ import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.BlockingDeque
 import javax.inject.Inject
+import javax.inject.Named
 import javax.inject.Singleton
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
@@ -15,7 +16,7 @@ import kotlinx.coroutines.*
 import org.owntracks.android.data.EndpointState
 import org.owntracks.android.data.repos.ContactsRepo
 import org.owntracks.android.data.repos.EndpointStateRepo
-import org.owntracks.android.data.repos.WaypointsRepo
+import org.owntracks.android.data.waypoints.WaypointsRepo
 import org.owntracks.android.di.ApplicationScope
 import org.owntracks.android.di.CoroutineScopes.IoDispatcher
 import org.owntracks.android.model.CommandAction
@@ -39,7 +40,8 @@ class MessageProcessor @Inject constructor(
     scheduler: Scheduler,
     private val endpointStateRepo: EndpointStateRepo,
     private val serviceBridge: ServiceBridge,
-    private val outgoingQueueIdlingResource: CountingIdlingResource,
+    @Named("outgoingQueueIdlingResource") private val outgoingQueueIdlingResource: CountingIdlingResource,
+    @Named("importConfigurationIdlingResource") private val importConfigurationIdlingResource: SimpleIdlingResource,
     private val locationProcessorLazy: Lazy<LocationProcessor>,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val scope: CoroutineScope
@@ -56,7 +58,7 @@ class MessageProcessor @Inject constructor(
 
     init {
         outgoingQueue = BlockingDequeThatAlsoSometimesPersistsThingsToDiskMaybe(
-            10000,
+            100_000,
             applicationContext.filesDir,
             parser
         )
@@ -274,7 +276,7 @@ class MessageProcessor @Inject constructor(
         endpointStateRepo.setQueueLength(outgoingQueue.size)
     }
 
-    fun processIncomingMessage(message: MessageBase) {
+    suspend fun processIncomingMessage(message: MessageBase) {
         Timber.i("Received incoming message: ${message.javaClass.simpleName} on ${message.contactKey}")
         when (message) {
             is MessageClear -> {
@@ -315,7 +317,7 @@ class MessageProcessor @Inject constructor(
         contactsRepo.update(message.contactKey, message)
     }
 
-    private fun processIncomingMessage(message: MessageCmd) {
+    private suspend fun processIncomingMessage(message: MessageCmd) {
         if (!preferences.cmd) {
             Timber.w("remote commands are disabled")
             return
@@ -340,38 +342,35 @@ class MessageProcessor @Inject constructor(
             }
             CommandAction.WAYPOINTS -> locationProcessorLazy.get()
                 .publishWaypointsMessage()
-            CommandAction.SET_WAYPOINTS -> if (message.waypoints != null) {
-                waypointsRepo.importFromMessage(message.waypoints!!.waypoints)
+            CommandAction.SET_WAYPOINTS -> message.waypoints?.run {
+                waypointsRepo.importFromMessage(waypoints)
             }
             CommandAction.SET_CONFIGURATION -> {
                 if (!preferences.remoteConfiguration) {
                     Timber.w("Received a remote configuration command but remote config setting is disabled")
-                }
-                if (message.configuration != null) {
-                    preferences.importConfiguration(message.configuration!!)
                 } else {
-                    Timber.w("No configuration provided")
-                }
-                if (message.waypoints != null) {
-                    waypointsRepo.importFromMessage(message.waypoints!!.waypoints)
-                }
-            }
-            CommandAction.RECONNECT -> {
-                if (message.modeId !== ConnectionMode.HTTP) {
-                    Timber.e("command not supported in HTTP mode: ${message.action}")
-                } else {
-                    scope.launch {
-                        reconnect()
+                    if (message.configuration != null) {
+                        preferences.importConfiguration(message.configuration!!)
+                    } else {
+                        Timber.i("No remote configuration provided")
+                    }
+                    if (message.waypoints != null) {
+                        waypointsRepo.importFromMessage(message.waypoints!!.waypoints)
+                    } else {
+                        Timber.d("No remote waypoints provided")
                     }
                 }
+                importConfigurationIdlingResource.setIdleState(true)
             }
-            else -> {}
+            CommandAction.CLEAR_WAYPOINTS -> {
+                waypointsRepo.clearAll()
+            }
+            null -> {}
         }
     }
 
-    fun publishLocationMessage(trigger: String?) {
-        locationProcessorLazy.get()
-            .publishLocationMessage(trigger)
+    suspend fun publishLocationMessage(trigger: MessageLocation.ReportType) {
+        locationProcessorLazy.get().publishLocationMessage(trigger)
     }
 
     private fun processIncomingMessage(message: MessageTransition) {
