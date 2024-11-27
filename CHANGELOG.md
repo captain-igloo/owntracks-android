@@ -1,11 +1,77 @@
 # Changelog
 
-## Version 2.5.0
+## Version 2.5.4
 
 ### New features
 
+- Galician Translation (thanks to Miguel Anxo Bouzada)
+- Hebrew Translation (thanks to Ahiel and Natan)
+- Dutch Translation (thanks to all contributors)
+- Setting a preference that doesn't actually change the value won't have any effects (such as MQTT reconnecting) (#1875)
+- Status messages contain the app version and flavour
+
+### Bug fixes
+
+- Try to not block the main thread when generating an Status Message, which causes an ANR
+- Messages that fail to send because the endpoint isn't ready now retry every 10 seconds, not every second
+- Import config screen displays JSON config LTR under RTL locales
+- setting / importing configuration options that are enums are now case-insensitive
+- Fix regression where setting the locatorPriority preference using a number wasn't working (#1874)
+
+## Version 2.5.3
+
+### New features
+
+- OSM map is a little easier to zoom without accidentally rotating (#1825)
+
+### Bug fixes
+
+- Use AGP-provided version of R8 rather than version from Google so that F-Droid can build it (#1852)
+
+## Version 2.5.2
+
+### New features
+
+- Added `cog` field to location messages showing current bearing (#1777)
+- Added `status` remote command to retrieve system configuration status (#1618)
+- On crash, details written to file and then printed at the top of the log next time OT starts
+
+### Bug fixes
+
+- Fix crash where changing the theme via setting the preferences remotely causes the theme change to not happen on the main thread
+- Fix crash where trying to close the MQTT connection whilst it's connecting thows an unhandled exception
+- Only latest stop reason should be printed to logs on startup
+- Fix bug where geofencing client wasn't initialized properly, leading to very unreliable region transition detection (#1764)
+- Fix bug where some settings (`pubQos`, `mqttProtocolLevel` etc.) couldn't be set via the config editor (#1801)
+- Fix crash when trying to decode an invalid face image on an info card
+- Fix MQTT disconnect when receiving an encrypted message that can't be decrypted (#1831)
+- Fix HTTP client certs not working properly with Nginx (#1793)
+- Fix ability to handle trigger="v" and "C" locations generated from iOS (#1768)
+
+## Version 2.5.1
+
+### New features
+
+- The background location permission is explicitly asked for in the welcome activity. It's also prompted if missing (but foreground location permissions are present) in the map activity, to catch people upgrading from <2.5.0.
+
+### Bug fixes
+
+- Re-added `tst` from Lwt MQTT message type that was accidentally dropped in 2.5.0 (#1766)
+- Fixed bug where locations with either "timer" ("t") or "beacon" ("b") type weren't processed by the app (#1768)
+- Fixed bug where negative latitudes and longitudes couldn't be entered into the waypoints activity (#1765)
+
+## Version 2.5.0
+
+### Breaking changes
+
+- OwnTracks will no longer manage your TLS CAs or client certs. For custom CA certs, you will need to add your CA to your device's CA store, and OwnTracks will use that store as a trusted reference for verifying TLS endpoints. Similarly, for client certificates, you'll need to add that certificate to the device's certificate store There should be a notification when OwnTracks starts after upgrade. (#736, #1061)
+- TLSv1 and TLSv1.1 are deprecated. Supported TLS versions are 1.2 and 1.3.
+
+### New features
+
+- Now translated into Indonesian, Italian, and British English(!)
 - Minimum device version is now SDK v24 (Android 7.0 Nougat)
-- When displayed, LanLngs now are limited to 4 decimal places, because more precision than that is a bit silly (#1278, #1279)
+- When displayed, LatLngs now are limited to 4 decimal places, because more precision than that is a bit silly (#1278, #1279)
 - The config editor text is now selectable
 - No need to restart the app once loading in a config any more!
 - Add an option for a location message to be republished on reconnection to MQTT (#1273, #1178)
@@ -13,16 +79,21 @@
 - Added korean translation
 - Shortcuts to preferences and logs on the launcher icon
 - Waypoints can be imported on the config import screen (#1284)
-- MQTT connection now reacts to changes in the device's default network, explicitly doing a reconnect
+- MQTT connection now reacts to changes in the device's default network, explicitly doing a reconnect (#642)
 - Waypoint delete UX made a little easier. Explicit button in the waypoint activity, rather than a long-press
 - Notification permissions are requested sensibly on Android 13+
 - Google Play Store build numbers will now just increment from 40800000, rather than reflect the version string
 - Background location permission! (Hurray!)
-- Prompt for location permissions in the welcome screen
+- Prompt for location & notification permissions in the welcome screen
 - An exported log file also contains the threadname for each logentry
-- Certificates are stored in-line in the config, rather than just the names. This should help import/export
-- Removed the undocumented `CLEAR_NOTIFICATIONS` and `REREQUEST_LOCATION_UPDATES` intents
+- Removed the undocumented `REREQUEST_LOCATION_UPDATES` intent
 - Added `clearWaypoints` remote command (#1022)
+- Contact direction arrow now moves with device to point in the actual direction of the contact
+- Share button added to contact sheet (#1465)
+- Changing the connection details will now clear the contacts and the location message backlog (#1598)
+- Messages now include a random `_id` (String) field which can be used by any consumer to correlate and distinguish send/return messages
+- `pubExtendedData` preference renamed to `extendedData` (#1654)
+- `reportLocation` command is now supported in HTTP mode
 
 ### Bug fixes
 
@@ -33,6 +104,28 @@
 - Config export actually exports to a local file now, rather than just a somewhat useless "share"
 - `conn` value correctly filled out as `o` (offline) when there's no network connection (#1442)
 - `batt` is ommitted from locations if extended data is disabled (#741)
+- Don't import waypoints from config if they're not valid (#1597)
+- Fix the list of MQTT topics that we listen to, so that we only listen to the cmd topic for our device
+- Publish new waypoints on the correct `/waypoint` topic
+- Fix issue where notificiation permission banner was shown on devices where the notifications were actually just disabled
+- Incoming messages that can't be parsed are now correctly handled as MessageUnknown
+- Map blue dot should show the location accuracy circle properly
+- Fix crash on importing config URIs that weren't valid
+- Fix bug when sharing logs via GMail (#1600)
+- Default the locater fastest interval to 1-second to address changes in Android 14 that was fixing fastest interval to `interval` seconds.
+
+## Version 2.4.12
+
+### Bug fixes
+
+- Fixed Google Maps layers not showing (#1460)
+- Added new APK signing key to the docs (#1461)
+- Added specific notification permission request (#1462)
+
+## Version 2.4.11
+
+- Bumped targetSdk to 33 to comply with Google Play Store policies
+- APK signing key updated to `1F:C4:DE:52:D0:DA:A3:3A:9C:0E:3D:67:21:7A:77:C8:95:B4:62:66:EF:02:0F:AD:0D:48:21:6A:6A:D6:CB:70`
 
 ## Version 2.4.10
 

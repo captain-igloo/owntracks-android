@@ -20,7 +20,6 @@ import org.owntracks.android.services.BackgroundService;
 import org.owntracks.android.services.worker.Scheduler;
 import org.owntracks.android.ui.contacts.ContactsActivity;
 import org.owntracks.android.ui.map.MapActivity;
-import org.owntracks.android.ui.speedLimit.SpeedLimitActivity;
 import org.owntracks.android.ui.preferences.PreferencesActivity;
 import org.owntracks.android.ui.preferences.about.AboutActivity;
 import org.owntracks.android.ui.waypoints.WaypointsActivity;
@@ -89,7 +88,6 @@ public class DrawerProvider {
                 .withStickyFooterDivider(true)
                 .addDrawerItems(
                         drawerItemForClass(activity, MapActivity.class, R.string.title_activity_map, R.drawable.ic_baseline_layers_24),
-                        drawerItemForClass(activity, SpeedLimitActivity.class, R.string.title_activity_speed_limit, R.drawable.ic_baseline_adjust_24),
                         drawerItemForClass(activity, ContactsActivity.class, R.string.title_activity_contacts, R.drawable.ic_baseline_supervisor_account_24),
                         drawerItemForClass(activity, WaypointsActivity.class, R.string.title_activity_waypoints, R.drawable.ic_baseline_adjust_24))
                 .addStickyDrawerItems(

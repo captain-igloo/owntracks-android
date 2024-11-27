@@ -1,11 +1,45 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:base",
+    "config:recommended",
     ":disableRateLimiting",
     ":rebaseStalePrs",
     ":disableDependencyDashboard"
   ],
   "assignees": ["growse"],
-  "ignoreDeps": ["android"]
+  "ignoreDeps": ["android"],
+  "packageRules": [
+    {
+      "matchPackagePatterns": ["com.google.flatbuffers:flatbuffers-java"],
+      "enabled": false
+    },
+    {
+      "matchDatasources": ["pypi"],
+      "matchFileNames": [".github/google-play-api/requirements.txt"],
+      "automerge": true
+    },
+    {
+      "matchPackagePatterns": ["^com.fasterxml.jackson"],
+      "enabled": false
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["major"]
+    },
+    {
+      "matchUpdateTypes": ["minor"],
+      "addLabels": ["minor"]
+    },
+    {
+      "matchUpdateTypes": ["patch"],
+      "addLabels": ["patch"]
+    },
+    {
+      "matchUpdateTypes": ["pin"],
+      "addLabels": ["pin"]
+    }
+  ],
+  "labels": ["dependencies"],
+  "platformAutomerge": true,
+  "automergeStrategy": "rebase"
 }

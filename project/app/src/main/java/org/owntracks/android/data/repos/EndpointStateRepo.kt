@@ -1,39 +1,37 @@
 package org.owntracks.android.data.repos
 
-import androidx.lifecycle.MutableLiveData
-import java.util.*
+import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.owntracks.android.data.EndpointState
 import timber.log.Timber
 
 @Singleton
 class EndpointStateRepo @Inject constructor() {
-    var endpointState: EndpointState = EndpointState.INITIAL
-        set(value) {
-            field = value
-            endpointStateLiveData.postValue(value)
-        }
 
-    fun setState(newEndpointState: EndpointState) {
-        Timber.v("Setting endpoint state $newEndpointState")
-        endpointState = newEndpointState
-    }
+  val endpointState: MutableStateFlow<EndpointState> = MutableStateFlow(EndpointState.IDLE)
 
-    fun setQueueLength(queueLength: Int) {
-        Timber.v("Setting queuelength=$queueLength")
-        endpointQueueLength.postValue(queueLength)
-    }
+  val endpointQueueLength: MutableStateFlow<Int> = MutableStateFlow(0)
 
-    fun setServiceStartedNow() {
-        serviceStartedDate.postValue(Date())
-    }
+  val serviceStartedDate: MutableStateFlow<Instant> = MutableStateFlow(Instant.now())
 
-    val endpointStateLiveData: MutableLiveData<EndpointState> =
-        // TODO migrate this to Kotlin flow once we get AGP 7
-        MutableLiveData(EndpointState.IDLE)
+  suspend fun setState(newEndpointState: EndpointState) {
+    Timber.v(
+        "Setting endpoint state $newEndpointState called from: ${
+            Thread.currentThread().stackTrace[3].run {
+                "$className: $methodName"
+            }
+            }")
+    endpointState.emit(newEndpointState)
+  }
 
-    val endpointQueueLength: MutableLiveData<Int> = MutableLiveData(0)
+  suspend fun setQueueLength(queueLength: Int) {
+    Timber.v("Setting queuelength=$queueLength")
+    endpointQueueLength.emit(queueLength)
+  }
 
-    val serviceStartedDate: MutableLiveData<Date> = MutableLiveData()
+  suspend fun setServiceStartedNow() {
+    serviceStartedDate.emit(Instant.now())
+  }
 }
