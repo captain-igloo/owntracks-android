@@ -63,6 +63,7 @@ import org.owntracks.android.location.LocationProviderClient
 import org.owntracks.android.location.LocationRequest
 import org.owntracks.android.location.LocationResult
 import org.owntracks.android.location.LocatorPriority
+import org.owntracks.android.location.MotionDetector
 import org.owntracks.android.location.geofencing.Geofence
 import org.owntracks.android.location.geofencing.GeofencingClient
 import org.owntracks.android.location.geofencing.GeofencingEvent
@@ -116,6 +117,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
 
   @Inject lateinit var requirementsChecker: RequirementsChecker
 
+  @Inject lateinit var motionDetector: MotionDetector
+
   @Inject
   @Named("contactsClearedIdlingResource")
   lateinit var contactsClearedIdlingResource: SimpleIdlingResource
@@ -125,7 +128,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
   private val callbackForReportType =
       mutableMapOf<MessageLocation.ReportType, Lazy<LocationCallbackWithReportType>>().apply {
         MessageLocation.ReportType.entries.forEach {
-          this[it] = lazy { LocationCallbackWithReportType(it, locationProcessor, lifecycleScope) }
+          this[it] = lazy { LocationCallbackWithReportType(it, locationProcessor, lifecycleScope, motionDetector) }
         }
       }
 
@@ -223,6 +226,11 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
                 it,
                 if (preferences.mode == ConnectionMode.MQTT) preferences.host
                 else preferences.url.toHttpUrlOrNull()?.host ?: "")
+          }
+        }
+        launch {
+          motionDetector.currentMotion.collect { moving ->
+            setupLocationRequest()
           }
         }
         endpointStateRepo.setServiceStartedNow()
@@ -528,9 +536,14 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
         }
 
         MonitoringMode.Significant -> {
-          interval = Duration.ofSeconds(preferences.locatorInterval.toLong())
-          smallestDisplacement = preferences.locatorDisplacement.toFloat()
-          priority = preferences.locatorPriority ?: LocatorPriority.BalancedPowerAccuracy
+          if (motionDetector.getMoving()) {
+            interval = Duration.ofSeconds(preferences.moveModeLocatorInterval.toLong())
+            priority = preferences.locatorPriority ?: LocatorPriority.HighAccuracy
+          } else {
+            interval = Duration.ofSeconds(preferences.locatorInterval.toLong())
+            smallestDisplacement = preferences.locatorDisplacement.toFloat()
+            priority = preferences.locatorPriority ?: LocatorPriority.BalancedPowerAccuracy
+          }
         }
 
         MonitoringMode.Move -> {
@@ -681,7 +694,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
   class LocationCallbackWithReportType(
       private val reportType: MessageLocation.ReportType,
       private val locationProcessor: LocationProcessor,
-      private val lifecycleCoroutineScope: LifecycleCoroutineScope
+      private val lifecycleCoroutineScope: LifecycleCoroutineScope,
+      private val motionDetector: MotionDetector
   ) : LocationCallback {
 
     override fun onLocationAvailability(locationAvailability: LocationAvailability) {
@@ -699,7 +713,10 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
 
     private fun onLocationChanged(location: Location, reportType: MessageLocation.ReportType) {
       Timber.v("backgroundservice location update received: $location, report type $reportType")
-      lifecycleCoroutineScope.launch { locationProcessor.onLocationChanged(location, reportType) }
+      lifecycleCoroutineScope.launch {
+        motionDetector.onLocationChanged(location)
+        locationProcessor.onLocationChanged(location, reportType)
+      }
     }
 
     override fun toString(): String {
