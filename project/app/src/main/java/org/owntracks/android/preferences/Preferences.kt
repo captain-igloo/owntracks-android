@@ -4,7 +4,6 @@ import android.os.Build
 import android.os.Build.VERSION.SDK_INT
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_AUTO_BATTERY
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
-import java.util.WeakHashMap
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -58,7 +57,7 @@ constructor(
       }
 
   private val placeholder = Any()
-  private val listeners = WeakHashMap<OnPreferenceChangeListener, Any>()
+  private val listeners = HashMap<OnPreferenceChangeListener, Any>()
 
   private val remappedPreferenceKeys = mapOf("pubExtendedData" to Preferences::extendedData)
 
@@ -203,6 +202,10 @@ constructor(
   @Preference var debugLog: Boolean by preferencesStore
 
   @Preference var deviceId: String by preferencesStore
+
+  // Number of seconds that must have elapsed since the last GPS location before we accept a network
+  // location
+  @Preference var discardNetworkLocationThresholdSeconds: Int by preferencesStore
 
   @Preference(exportModeMqtt = false) var dontReuseHttpClient: Boolean by preferencesStore
 
@@ -426,11 +429,14 @@ constructor(
     const val EXPERIMENTAL_FEATURE_SHOW_EXPERIMENTAL_PREFERENCE_UI = "showExperimentalPreferenceUI"
     const val EXPERIMENTAL_FEATURE_LOCATION_PING_USES_HIGH_ACCURACY_LOCATION_REQUEST =
         "locationPingUsesHighAccuracyLocationRequest"
+    const val EXPERIMENTAL_FEATURE_REQUEST_LOCATION_ON_SIGNIFICANT_MOTION =
+        "requestLocationOnSignificantMotion"
 
     internal val EXPERIMENTAL_FEATURES =
         setOf(
             EXPERIMENTAL_FEATURE_SHOW_EXPERIMENTAL_PREFERENCE_UI,
-            EXPERIMENTAL_FEATURE_LOCATION_PING_USES_HIGH_ACCURACY_LOCATION_REQUEST)
+            EXPERIMENTAL_FEATURE_LOCATION_PING_USES_HIGH_ACCURACY_LOCATION_REQUEST,
+            EXPERIMENTAL_FEATURE_REQUEST_LOCATION_ON_SIGNIFICANT_MOTION)
 
     val SYSTEM_NIGHT_AUTO_MODE by lazy {
       if (SDK_INT > Build.VERSION_CODES.Q) {

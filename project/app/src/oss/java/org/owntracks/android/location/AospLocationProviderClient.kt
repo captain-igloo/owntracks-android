@@ -49,8 +49,9 @@ class AospLocationProviderClient(val context: Context) : LocationProviderClient(
           this,
           LocationSources.GPS.name.lowercase(),
           android.os.CancellationSignal(),
-          ExecutorCompat.create(Handler(looper))) { location: Location ->
-            clientCallBack.onLocationResult(LocationResult(location))
+          ExecutorCompat.create(Handler(looper))) { location: Location? ->
+            location?.run { clientCallBack.onLocationResult(LocationResult(this)) }
+                ?: Timber.w("Got null location from getCurrentLocation")
           }
     }
   }
@@ -100,7 +101,7 @@ class AospLocationProviderClient(val context: Context) : LocationProviderClient(
         } catch (e: IllegalArgumentException) {
           if (e.message == "unregistered listener cannot be flushed") {
             Timber.d(
-                "Unable to flush locations for ${it.second} callback, as provider {it.second} is not registered")
+                "Unable to flush locations for ${it.second} callback, as provider ${it.second} is not registered")
           } else {
             Timber.e(e, "Unable to flush locations for ${it.second} callback")
           }

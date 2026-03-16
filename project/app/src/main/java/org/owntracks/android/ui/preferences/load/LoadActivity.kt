@@ -8,15 +8,21 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.databinding.DataBindingUtil
-import androidx.test.espresso.IdlingResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.snackbar.Snackbar
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.IOException
+import kotlinx.coroutines.launch
 import org.owntracks.android.R
 import org.owntracks.android.databinding.UiPreferencesLoadBinding
 import timber.log.Timber
@@ -28,21 +34,34 @@ class LoadActivity : AppCompatActivity() {
   private lateinit var binding: UiPreferencesLoadBinding
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     binding =
-        DataBindingUtil.setContentView<UiPreferencesLoadBinding?>(
-                this, R.layout.ui_preferences_load)
+        DataBindingUtil.setContentView<UiPreferencesLoadBinding>(this, R.layout.ui_preferences_load)
             .apply {
               vm = viewModel
               lifecycleOwner = this@LoadActivity
               setSupportActionBar(appbar.toolbar)
+
+              // Handle window insets for edge-to-edge
+              ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+                val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+                appbar.root.updatePadding(top = insets.top)
+                WindowInsetsCompat.CONSUMED
+              }
             }
-    viewModel.displayedConfiguration.observe(this) { invalidateOptionsMenu() }
-    viewModel.configurationImportStatus.observe(this) {
-      invalidateOptionsMenu()
-      Timber.d("ImportStatus is $it")
-      if (it == ImportStatus.SAVED) {
-        finish()
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        launch { viewModel.displayedConfiguration.collect { invalidateOptionsMenu() } }
+        launch {
+          viewModel.configurationImportStatus.collect {
+            invalidateOptionsMenu()
+            Timber.d("ImportStatus is $it")
+            if (it == ImportStatus.SAVED) {
+              finish()
+            }
+          }
+        }
       }
     }
     handleIntent(intent)
@@ -143,10 +162,6 @@ class LoadActivity : AppCompatActivity() {
       return output
     }
   }
-
-  @get:VisibleForTesting
-  val saveConfigurationIdlingResource: IdlingResource
-    get() = viewModel.saveConfigurationIdlingResource
 
   companion object {
     const val FLAG_IN_APP = "INAPP"

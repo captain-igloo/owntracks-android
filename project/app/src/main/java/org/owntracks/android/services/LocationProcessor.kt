@@ -56,13 +56,15 @@ constructor(
           .run { preferences.ignoreInaccurateLocations == 0 || l.accuracy < this }
           .also {
             if (!it) {
-              Timber.v(
+              Timber.d(
                   "Location accuracy ${l.accuracy} is outside accuracy threshold of ${preferences.ignoreInaccurateLocations}")
             }
           }
 
   suspend fun publishLocationMessage(trigger: MessageLocation.ReportType) =
       locationRepo.currentPublishedLocation.value?.run { publishLocationMessage(trigger, this) }
+
+  private val highAccuracyProviders = setOf("gps", "fused")
 
   private suspend fun publishLocationMessage(
       trigger: MessageLocation.ReportType,
@@ -71,16 +73,32 @@ constructor(
     Timber.v("Maybe publishing $location with trigger $trigger")
     if (!locationIsWithAccuracyThreshold(location))
         return Result.failure(Exception("location accuracy too low"))
-    val loadedWaypoints = withContext(ioDispatcher) { waypointsRepo.all }
+
+    // If this location has come from the network *and* the most recent location was both recent and
+    // high-accuracy, then it's probably not usefully accurate. Drop it.
+    locationRepo.currentPublishedLocation.value?.let { lastLocation ->
+      if (highAccuracyProviders.contains(location.provider) &&
+          lastLocation.provider == "network" &&
+          location.time - lastLocation.time <
+              preferences.discardNetworkLocationThresholdSeconds * 1000) {
+        Timber.d(
+            "Ignoring location from ${location.provider}, last was from gps, and time difference is less than 1s")
+        return Result.failure(
+            Exception("Ignoring location from ${location.provider}, last was recent and from gps"))
+      }
+    }
+
+    val loadedWaypoints = withContext(ioDispatcher) { waypointsRepo.getAll() }
     Timber.d("publishLocationMessage for $location triggered by $trigger")
 
     // Check if publish would trigger a region if fusedRegionDetection is enabled
-    Timber.v(
+    Timber.d(
         "Checking if location triggers waypoint transitions. waypoints: $loadedWaypoints, trigger=$trigger, fusedRegionDetection: ${preferences.fusedRegionDetection}")
     if (loadedWaypoints.isNotEmpty() &&
         preferences.fusedRegionDetection &&
         trigger != MessageLocation.ReportType.CIRCULAR) {
       loadedWaypoints.forEach { waypoint ->
+        Timber.d("onWaypointTransition triggered by location waypoint intersection event")
         onWaypointTransition(
             waypoint,
             location,
@@ -95,13 +113,13 @@ constructor(
     }
     if (preferences.monitoring === MonitoringMode.Quiet &&
         MessageLocation.ReportType.USER != trigger) {
-      Timber.v("message suppressed by monitoring settings: quiet")
+      Timber.d("message suppressed by monitoring settings: quiet")
       return Result.failure(Exception("message suppressed by monitoring settings: quiet"))
     }
     if (preferences.monitoring === MonitoringMode.Manual &&
         MessageLocation.ReportType.USER != trigger &&
         MessageLocation.ReportType.CIRCULAR != trigger) {
-      Timber.v("message suppressed by monitoring settings: manual")
+      Timber.d("message suppressed by monitoring settings: manual")
       return Result.failure(Exception("message suppressed by monitoring settings: manual"))
     }
 
@@ -112,6 +130,7 @@ constructor(
                 batteryStatus = deviceMetricsProvider.batteryStatus
                 conn = deviceMetricsProvider.connectionType
                 monitoringMode = preferences.monitoring
+                source = location.provider
               }
             } else {
               fromLocation(location, Build.VERSION.SDK_INT)
@@ -190,7 +209,7 @@ constructor(
         waypointModel.lastTriggered = Instant.now()
         waypointsRepo.update(waypointModel, false)
         if (preferences.monitoring === MonitoringMode.Quiet) {
-          Timber.v("message suppressed by monitoring settings: ${preferences.monitoring}")
+          Timber.d("message suppressed by monitoring settings: ${preferences.monitoring}")
         } else {
           publishTransitionMessage(waypointModel, location, transition, trigger)
           if (trigger == MessageTransition.TRIGGER_CIRCULAR) {
@@ -232,7 +251,7 @@ constructor(
               MessageWaypointCollection().apply {
                 withContext(ioDispatcher) {
                   addAll(
-                      waypointsRepo.all.map {
+                      waypointsRepo.getAll().map {
                         MessageWaypoint().apply {
                           description = it.description
                           latitude = it.geofenceLatitude.value

@@ -8,28 +8,36 @@ import android.location.Location
 import androidx.annotation.MainThread
 import androidx.databinding.Observable
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlin.math.asin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.owntracks.android.BR
 import org.owntracks.android.data.repos.ContactsRepo
 import org.owntracks.android.data.repos.ContactsRepoChange
 import org.owntracks.android.data.repos.LocationRepo
+import org.owntracks.android.data.waypoints.WaypointModel
 import org.owntracks.android.data.waypoints.WaypointsRepo
 import org.owntracks.android.geocoding.GeocoderProvider
 import org.owntracks.android.location.LatLng
 import org.owntracks.android.location.toLatLng
+import org.owntracks.android.model.CommandAction
 import org.owntracks.android.model.Contact
 import org.owntracks.android.model.messages.MessageClear
+import org.owntracks.android.model.messages.MessageCmd
 import org.owntracks.android.model.messages.MessageLocation
 import org.owntracks.android.preferences.Preferences
-import org.owntracks.android.preferences.types.ConnectionMode
 import org.owntracks.android.preferences.types.MonitoringMode
 import org.owntracks.android.services.LocationProcessor
 import org.owntracks.android.services.MessageProcessor
@@ -46,70 +54,85 @@ constructor(
     private val geocoderProvider: GeocoderProvider,
     private val preferences: Preferences,
     private val locationRepo: LocationRepo,
-    waypointsRepo: WaypointsRepo,
+    private val waypointsRepo: WaypointsRepo,
     application: Application,
     private val requirementsChecker: RequirementsChecker
 ) : AndroidViewModel(application) {
+  // Reused buffers for Location.distanceBetween() calls. Two separate instances are required
+  // because the two call-sites run on different threads (main thread vs sensor callback thread).
+  private val locationDistanceResult = FloatArray(2)
+  private val sensorDistanceResult = FloatArray(2)
+
   // controls who the currently selected contact is
-  private val mutableCurrentContact = MutableLiveData<Contact?>()
-  val currentContact: LiveData<Contact?>
+  private val mutableCurrentContact = MutableStateFlow<Contact?>(null)
+  val currentContact: StateFlow<Contact?>
     get() = mutableCurrentContact
 
   // controls the state of the bottom sheet on the map
-  private val mutableBottomSheetHidden = MutableLiveData<Boolean>()
-  val bottomSheetHidden: LiveData<Boolean>
+  private val mutableBottomSheetHidden = MutableStateFlow(true)
+  val bottomSheetHidden: StateFlow<Boolean>
     get() = mutableBottomSheetHidden
 
-  // Controls where the map should set the camera to
-  private val mutableMapCenter = MutableLiveData<LatLng>()
-  val mapCenter: LiveData<LatLng>
+  // Controls where the map should set the camera to (fire-and-forget event)
+  private val mutableMapCenter = MutableSharedFlow<LatLng>(extraBufferCapacity = 1)
+  val mapCenter: SharedFlow<LatLng>
     get() = mutableMapCenter
 
   // Shows the current distance to the selected contact
-  private val mutableContactDistance = MutableLiveData(0f)
-  val contactDistance: LiveData<Float>
+  private val mutableContactDistance = MutableStateFlow(0f)
+  val contactDistance: StateFlow<Float>
     get() = mutableContactDistance
 
   // Shows the bearing to the selected contact
-  private val mutableContactBearing = MutableLiveData(0f)
-  val contactBearing: LiveData<Float>
+  private val mutableContactBearing = MutableStateFlow(0f)
+  val contactBearing: StateFlow<Float>
     get() = mutableContactBearing
 
   // Shows the relative bearing from this device orientation to the contact
-  private val mutableRelativeContactBearing = MutableLiveData(0f)
-  val relativeContactBearing: LiveData<Float>
+  private val mutableRelativeContactBearing = MutableStateFlow(0f)
+  val relativeContactBearing: StateFlow<Float>
     get() = mutableRelativeContactBearing
 
   // Controls the current map layer style
-  private val mutableMapLayerStyle = MutableLiveData(preferences.mapLayerStyle)
-  val mapLayerStyle: LiveData<MapLayerStyle>
+  private val mutableMapLayerStyle = MutableStateFlow(preferences.mapLayerStyle)
+  val mapLayerStyle: StateFlow<MapLayerStyle>
     get() = mutableMapLayerStyle
 
   // Controls the status of the MyLocation FAB on the map
-  private val mutableMyLocationStatus = MutableLiveData(MyLocationStatus.DISABLED)
-  val myLocationStatus: LiveData<MyLocationStatus>
+  private val mutableMyLocationStatus = MutableStateFlow(MyLocationStatus.DISABLED)
+  val myLocationStatus: StateFlow<MyLocationStatus>
     get() = mutableMyLocationStatus
 
-  val currentLocation = LocationLiveData(application, viewModelScope)
-  val waypoints = waypointsRepo.allLive
+  private val locationUpdatesRequested = MutableStateFlow(false)
+
+  @Suppress("MissingPermission") // Permission is checked in requestLocationUpdatesForBlueDot
+  @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+  val currentLocation: StateFlow<Location?> =
+      locationUpdatesRequested
+          .flatMapLatest { if (it) locationCallbackFlow(application) else emptyFlow() }
+          .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+  val waypointUpdatedEvent = waypointsRepo.repoChangedEvent
+
+  suspend fun getAllWaypoints(): List<WaypointModel> {
+    return waypointsRepo.getAll()
+  }
+
   val allContacts = contactsRepo.all
   val contactUpdatedEvent: Flow<ContactsRepoChange> = contactsRepo.repoChangedEvent
 
   val scope: CoroutineScope
     get() = viewModelScope
 
-  private val mutableCurrentMonitoringMode: MutableLiveData<MonitoringMode> by lazy {
-    MutableLiveData(preferences.monitoring)
-  }
+  private val mutableCurrentMonitoringMode = MutableStateFlow(preferences.monitoring)
 
-  val currentMonitoringMode: LiveData<MonitoringMode>
+  val currentMonitoringMode: StateFlow<MonitoringMode>
     get() = mutableCurrentMonitoringMode
 
-  private val currentConnectionMode: MutableLiveData<ConnectionMode> by lazy {
-    MutableLiveData(preferences.mode)
-  }
-
   val viewMode: ViewMode by locationRepo::viewMode
+
+  val zoomLevel: Double?
+    get() = locationRepo.mapViewWindowLocationAndZoom?.zoom
 
   /**
    * Sets the status of the "My Location" button based on whether the location permissions are
@@ -117,7 +140,7 @@ constructor(
    * update
    */
   fun updateMyLocationStatus() {
-    mutableMyLocationStatus.postValue(
+    mutableMyLocationStatus.value =
         if (requirementsChecker.hasLocationPermissions() &&
             requirementsChecker.isLocationServiceEnabled()) {
           if (viewMode == ViewMode.Device) {
@@ -127,7 +150,7 @@ constructor(
           }
         } else {
           MyLocationStatus.DISABLED
-        })
+        }
   }
 
   fun hasLocationPermission() = requirementsChecker.hasLocationPermissions()
@@ -136,10 +159,9 @@ constructor(
       object : Preferences.OnPreferenceChangeListener {
         override fun onPreferenceChanged(properties: Set<String>) {
           if (properties.contains("monitoring")) {
-            mutableCurrentMonitoringMode.postValue(preferences.monitoring)
+            mutableCurrentMonitoringMode.value = preferences.monitoring
           }
           if (properties.contains("mode")) {
-            currentConnectionMode.postValue(preferences.mode)
             clearActiveContact()
           }
         }
@@ -211,7 +233,7 @@ constructor(
               updateActiveContactDistanceAndBearing(this)
             }
             BR.trackerId -> {
-              mutableCurrentContact.postValue(this)
+              mutableCurrentContact.value = this
             }
           }
         }
@@ -229,7 +251,7 @@ constructor(
     mutableBottomSheetHidden.value = false
     refreshGeocodeForContact(contact)
     updateActiveContactDistanceAndBearing(contact)
-    if (center && contact.latLng != null) mutableMapCenter.postValue(contact.latLng)
+    if (center) contact.latLng?.let { mutableMapCenter.tryEmit(it) }
     updateMyLocationStatus()
   }
 
@@ -244,23 +266,20 @@ constructor(
     Timber.d("setting view mode: VIEW_DEVICE")
     locationRepo.viewMode = ViewMode.Device
     clearActiveContact()
-    currentLocation.value?.apply { mutableMapCenter.postValue(this.toLatLng()) }
+    currentLocation.value?.apply { mutableMapCenter.tryEmit(this.toLatLng()) }
         ?: run { Timber.w("no location available") }
     updateMyLocationStatus()
   }
 
   @MainThread
   fun setLiveContact(contactId: String?) {
-    contactId?.let {
-      locationRepo.viewMode = ViewMode.Contact(true)
-      contactsRepo.getById(it)?.run(mutableCurrentContact::setValue)
-    }
+    contactId?.let { setViewModeContact(it, true) }
   }
 
   private fun clearActiveContact() {
     mutableCurrentContact.value?.removeOnPropertyChangedCallback(contactPropertyChangedCallback)
-    mutableCurrentContact.postValue(null)
-    mutableBottomSheetHidden.postValue(true)
+    mutableCurrentContact.value = null
+    mutableBottomSheetHidden.value = true
   }
 
   fun onClearContactClicked() {
@@ -269,6 +288,22 @@ constructor(
       viewModelScope.launch { contactsRepo.remove(it.id) }
     }
     clearActiveContact()
+  }
+
+  private val mutableLocationRequestContactCommandFlow =
+      MutableSharedFlow<Contact>(extraBufferCapacity = 1)
+
+  val locationRequestContactCommandFlow: Flow<Contact> = mutableLocationRequestContactCommandFlow
+
+  fun sendLocationRequestToCurrentContact() {
+    mutableCurrentContact.value?.also {
+      messageProcessor.queueMessageForSending(
+          MessageCmd().apply {
+            topic = it.id + preferences.commandTopicSuffix
+            action = CommandAction.REPORT_LOCATION
+          })
+      mutableLocationRequestContactCommandFlow.tryEmit(it)
+    }
   }
 
   private fun updateActiveContactDistanceAndBearing(contact: Contact) {
@@ -283,16 +318,15 @@ constructor(
 
   private fun updateActiveContactDistanceAndBearing(currentLocation: Location, contact: Contact) {
     contact.latLng?.run {
-      val distanceBetween = FloatArray(2)
       Location.distanceBetween(
           currentLocation.latitude,
           currentLocation.longitude,
           latitude.value,
           longitude.value,
-          distanceBetween)
-      mutableContactDistance.postValue(distanceBetween[0])
-      mutableContactBearing.postValue(distanceBetween[1])
-      mutableRelativeContactBearing.postValue(distanceBetween[1])
+          locationDistanceResult)
+      mutableContactDistance.value = locationDistanceResult[0]
+      mutableContactBearing.value = locationDistanceResult[1]
+      mutableRelativeContactBearing.value = locationDistanceResult[1]
     }
   }
 
@@ -321,8 +355,7 @@ constructor(
   /** Start requesting location updates for the blue dot */
   fun requestLocationUpdatesForBlueDot() {
     if (requirementsChecker.hasLocationPermissions()) {
-      @Suppress("MissingPermission") // We've already checked for permissions
-      viewModelScope.launch { currentLocation.requestLocationUpdates() }
+      locationUpdatesRequested.value = true
     }
   }
 
@@ -364,6 +397,25 @@ constructor(
                 LatLng(STARTING_LATITUDE, STARTING_LONGITUDE), STARTING_ZOOM)
       }
 
+  /**
+   * Returns a sensible map starting location for when the map is resumed, but only when in Device
+   * view mode. In Device mode, prefers the current blue dot location, then the most recently
+   * published location, then falls back to the Paris default. Returns null for other view modes so
+   * that the camera is left where the user last positioned it.
+   */
+  fun mapStartingLocationOnResume(): MapLocationZoomLevelAndRotation? {
+    if (viewMode != ViewMode.Device) return null
+    val currentZoom = locationRepo.mapViewWindowLocationAndZoom?.zoom ?: STARTING_ZOOM
+    return locationRepo.currentBlueDotOnMapLocation?.let {
+      MapLocationZoomLevelAndRotation(it, currentZoom)
+    }
+        ?: locationRepo.currentPublishedLocation.value?.let {
+          MapLocationZoomLevelAndRotation(it.toLatLng(), currentZoom)
+        }
+        ?: MapLocationZoomLevelAndRotation(
+            LatLng(STARTING_LATITUDE, STARTING_LONGITUDE), currentZoom)
+  }
+
   val orientationSensorEventListener =
       object : SensorEventListener {
         override fun onSensorChanged(maybeEvent: SensorEvent?) {
@@ -372,14 +424,13 @@ constructor(
               currentLocation.value?.let { currentLocation ->
                 // Orientation is angle around the Z axis
                 val azimuth = (180 / Math.PI) * 2 * asin(event.values[2])
-                val distanceBetween = FloatArray(2)
                 Location.distanceBetween(
                     currentLocation.latitude,
                     currentLocation.longitude,
                     contactLatLng.latitude.value,
                     contactLatLng.longitude.value,
-                    distanceBetween)
-                mutableRelativeContactBearing.postValue(distanceBetween[1] + azimuth.toFloat())
+                    sensorDistanceResult)
+                mutableRelativeContactBearing.value = sensorDistanceResult[1] + azimuth.toFloat()
               }
             }
           }
@@ -396,7 +447,7 @@ constructor(
 
   fun setMapLayerStyle(mapLayerStyle: MapLayerStyle) {
     preferences.mapLayerStyle = mapLayerStyle
-    mutableMapLayerStyle.postValue(mapLayerStyle)
+    mutableMapLayerStyle.value = mapLayerStyle
   }
 
   companion object {

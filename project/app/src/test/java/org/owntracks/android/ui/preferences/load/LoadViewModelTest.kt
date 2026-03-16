@@ -1,16 +1,15 @@
 package org.owntracks.android.ui.preferences.load
 
 import android.content.Context
-import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
@@ -27,8 +26,6 @@ class LoadViewModelTest {
   private lateinit var preferencesStore: PreferencesStore
   private val mockIdlingResource = SimpleIdlingResource("mock", true)
 
-  @get:Rule val instantExecutorRule = InstantTaskExecutorRule()
-
   @Before
   fun createMocks() {
     mockContext = mock { on { packageName } doReturn javaClass.canonicalName }
@@ -41,7 +38,12 @@ class LoadViewModelTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
         val vm =
-            LoadViewModel(preferences, parser, InMemoryWaypointsRepo(), UnconfinedTestDispatcher())
+            LoadViewModel(
+                preferences,
+                parser,
+                InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher()),
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         vm.extractPreferencesFromUri("owntracks:///config?{}")
         assertEquals(ImportStatus.FAILED, vm.configurationImportStatus.value)
         assertEquals(
@@ -54,7 +56,12 @@ class LoadViewModelTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
         val vm =
-            LoadViewModel(preferences, parser, InMemoryWaypointsRepo(), UnconfinedTestDispatcher())
+            LoadViewModel(
+                preferences,
+                parser,
+                InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher()),
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         vm.extractPreferencesFromUri("owntracks:///config?inline=e30=")
         assertEquals(ImportStatus.FAILED, vm.configurationImportStatus.value)
         assertEquals("Message is not a valid configuration message", vm.importError.value)
@@ -66,9 +73,14 @@ class LoadViewModelTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
         val vm =
-            LoadViewModel(preferences, parser, InMemoryWaypointsRepo(), UnconfinedTestDispatcher())
+            LoadViewModel(
+                preferences,
+                parser,
+                InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher()),
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         vm.extractPreferencesFromUri(
-            "owntracks:///config?inline=eyJfdHlwZSI6ImNvbmZpZ3VyYXRpb24ifQ")
+            "owntracks:///config?inline=eyJfdHlwZSI6ImNvbmZpZ3VyYXRpb24ifQ==")
         advanceUntilIdle()
         assertEquals(ImportStatus.SUCCESS, vm.configurationImportStatus.value)
         val json = ObjectMapper().readTree(vm.displayedConfiguration.value)
@@ -86,7 +98,12 @@ class LoadViewModelTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
         val vm =
-            LoadViewModel(preferences, parser, InMemoryWaypointsRepo(), UnconfinedTestDispatcher())
+            LoadViewModel(
+                preferences,
+                parser,
+                InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher()),
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         vm.extractPreferencesFromUri(
             "owntracks:///config?inline=eyJfdHlwZSI6IndheXBvaW50cyIsIndheXBvaW50cyI6W3siX3R5cGUiOiJ3YXlwb2ludCIsImRlc2MiOiJUZXN0IFdheXBvaW50IiwibGF0Ijo1MSwibG9uIjowLCJyYWQiOjQ1MCwidHN0IjoxNTk4NDUxMzcyfV19")
         val displayedConfig = vm.displayedConfiguration.value
@@ -120,8 +137,14 @@ class LoadViewModelTest {
       runTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
-        val waypointsRepo = InMemoryWaypointsRepo()
-        val vm = LoadViewModel(preferences, parser, waypointsRepo, UnconfinedTestDispatcher())
+        val waypointsRepo = InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher())
+        val vm =
+            LoadViewModel(
+                preferences,
+                parser,
+                waypointsRepo,
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         val config =
             """
             {
@@ -144,7 +167,7 @@ class LoadViewModelTest {
         vm.saveConfiguration()
         advanceUntilIdle()
         assertEquals(ImportStatus.SAVED, vm.configurationImportStatus.value)
-        assertEquals(1, waypointsRepo.all.size)
+        assertEquals(1, waypointsRepo.getAll().size)
         assertEquals("testClientId", preferences.clientId)
       }
 
@@ -153,8 +176,14 @@ class LoadViewModelTest {
       runTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
-        val waypointsRepo = InMemoryWaypointsRepo()
-        val vm = LoadViewModel(preferences, parser, waypointsRepo, UnconfinedTestDispatcher())
+        val waypointsRepo = InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher())
+        val vm =
+            LoadViewModel(
+                preferences,
+                parser,
+                waypointsRepo,
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         val config =
             """
             {
@@ -174,8 +203,14 @@ class LoadViewModelTest {
       runTest {
         val parser = Parser(null)
         val preferences = Preferences(preferencesStore, mockIdlingResource)
-        val waypointsRepo = InMemoryWaypointsRepo()
-        val vm = LoadViewModel(preferences, parser, waypointsRepo, UnconfinedTestDispatcher())
+        val waypointsRepo = InMemoryWaypointsRepo(this, mockContext, StandardTestDispatcher())
+        val vm =
+            LoadViewModel(
+                preferences,
+                parser,
+                waypointsRepo,
+                UnconfinedTestDispatcher(),
+                SimpleIdlingResource("", true))
         val config =
             """
             {

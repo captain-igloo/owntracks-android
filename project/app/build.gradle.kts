@@ -1,10 +1,8 @@
 import org.gradle.api.tasks.testing.logging.TestLogEvent
-import kotlin.io.path.isRegularFile
 
 plugins {
   id("com.android.application")
   id("com.google.dagger.hilt.android")
-  id("com.github.triplet.play")
   kotlin("android")
   kotlin("kapt")
   alias(libs.plugins.ktfmt)
@@ -14,34 +12,55 @@ plugins {
 apply<EspressoMetadataEmbeddingPlugin>()
 
 val googleMapsAPIKey =
-    System.getenv("GOOGLE_MAPS_API_KEY")?.toString() ?: extra.get("google_maps_api_key")?.toString()
-    ?: "PLACEHOLDER_API_KEY"
+    System.getenv("GOOGLE_MAPS_API_KEY")
+        ?: extra.get("google_maps_api_key")?.toString()
+        ?: "PLACEHOLDER_API_KEY"
 
 val gmsImplementation: Configuration by configurations.creating
 
-val packageVersionCode: Int = System.getenv("VERSION_CODE")?.toInt() ?: 420503000
+val versionNameValue = "2.5.7"
+
+fun generateVersionCode(versionName: String): Int {
+  val parts = versionName.split(".")
+  val major = parts.getOrNull(0)?.toIntOrNull() ?: 0
+  val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+  val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+  return 400000000 + major * 10000000 + minor * 100000 + patch * 1000
+}
+
+val generatedVersionCode = generateVersionCode(versionNameValue)
+val envVersionCode = System.getenv("VERSION_CODE")?.toInt()
+val packageVersionCode: Int =
+    if (envVersionCode != null && envVersionCode > generatedVersionCode) {
+      envVersionCode
+    } else {
+      generatedVersionCode
+    }
 val manuallySetVersion: Boolean = System.getenv("VERSION_CODE") != null
+val enablePlayPublishing: Boolean = !System.getenv("ANDROID_PUBLISHER_CREDENTIALS").isNullOrBlank()
 
 android {
-  compileSdk = 34
+  compileSdk = 36
   namespace = "org.owntracks.android"
 
   defaultConfig {
     applicationId = "org.owntracks.android"
     minSdk = 24
-    targetSdk = 34
+    targetSdk = 36
 
     versionCode = packageVersionCode
-    versionName = "2.5.3"
+    versionName = versionNameValue
 
-    val localeCount = fileTree("src/main/res/").map {
-      it.toPath()
-    }.count { it.isRegularFile() && it.fileName.toString() == "strings.xml" }
+    val localeCount = fileTree("src/main/res/").matching { include("**/strings.xml") }.files.size
+
     buildConfigField(
-        "int", "TRANSLATION_COUNT", localeCount.toString(),
+        "int",
+        "TRANSLATION_COUNT",
+        localeCount.toString(),
     )
 
-    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    testInstrumentationRunner = "org.owntracks.android.testutils.hilt.CustomTestRunner"
+
     testInstrumentationRunnerArguments.putAll(
         mapOf(
             "clearPackageData" to "false",
@@ -51,26 +70,24 @@ android {
         ),
     )
     javaCompileOptions {
-      annotationProcessorOptions {
-        arguments["room.schemaLocation"] = "$projectDir/schemas"
-      }
+      annotationProcessorOptions { arguments["room.schemaLocation"] = "$projectDir/schemas" }
     }
   }
 
-  androidResources {
-    generateLocaleConfig = true
-  }
+  androidResources { generateLocaleConfig = true }
 
-  signingConfigs {
-    register("release") {
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEYSTORE_PASSPHRASE")
-      storeFile = file("../owntracks.release.keystore.jks")
-      storePassword = System.getenv("KEYSTORE_PASSPHRASE")
-      enableV1Signing = true
-      enableV2Signing = true
-      enableV3Signing = true
-      enableV4Signing = true
+  if (!System.getenv("KEYSTORE_PASSPHRASE").isNullOrBlank()) {
+    signingConfigs {
+      register("release") {
+        keyAlias = "upload"
+        keyPassword = System.getenv("KEYSTORE_PASSPHRASE")
+        storeFile = file("../owntracks.release.keystore.jks")
+        storePassword = System.getenv("KEYSTORE_PASSPHRASE")
+        enableV1Signing = true
+        enableV2Signing = true
+        enableV3Signing = true
+        enableV4Signing = true
+      }
     }
   }
 
@@ -111,9 +128,7 @@ android {
     viewBinding = true
   }
 
-  dataBinding {
-    addKtx = true
-  }
+  dataBinding { addKtx = true }
 
   packaging {
     resources.excludes.add("META-INF/*")
@@ -128,48 +143,19 @@ android {
     abortOnError = false
     disable.addAll(
         setOf(
-            "TypographyFractions", "TypographyQuotes", "Typos",
+            "TypographyFractions",
+            "TypographyQuotes",
+            "Typos",
         ),
     )
   }
   testOptions {
     execution = "ANDROIDX_TEST_ORCHESTRATOR"
     animationsDisabled = true
-    unitTests {
-      isIncludeAndroidResources = true
-    }
+    unitTests { isIncludeAndroidResources = true }
     managedDevices {
-      localDevices {
-        val hardware = "Small Phone"
-        create("api34aosp") {
-          device = hardware
-          apiLevel = 34
-          systemImageSource = "aosp-atd"
-        }
-        create("api27aosp") {
-          device = hardware
-          apiLevel = 27
-          systemImageSource = "aosp"
-        }
-        create("api34gms") {
-          device = hardware
-          apiLevel = 34
-          systemImageSource = "google-atd"
-        }
-        create("api27gms") {
-          device = hardware
-          apiLevel = 27
-          systemImageSource = "google"
-        }
-      }
-      groups {
-        create("allGmsApis") {
-          targetDevices.addAll(listOf(devices["api34gms"], devices["api27gms"]))
-        }
-        create("allAospApis") {
-          targetDevices.addAll(listOf(devices["api34aosp"], devices["api27aosp"]))
-        }
-      }
+      localDevices {}
+      groups {}
     }
   }
 
@@ -194,14 +180,12 @@ android {
   }
 
   compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
     isCoreLibraryDesugaringEnabled = true
   }
 
-  kotlinOptions {
-    jvmTarget = JavaVersion.VERSION_17.toString()
-  }
+  kotlinOptions { jvmTarget = JavaVersion.VERSION_21.toString() }
 
   flavorDimensions.add("locationProvider")
   productFlavors {
@@ -212,20 +196,7 @@ android {
         gmsImplementation(libs.play.services.location)
       }
     }
-    create("oss") {
-      dimension = "locationProvider"
-    }
-  }
-  playConfigs {
-    register("gms") {
-      enabled.set(true)
-      track.set("internal")
-      if (manuallySetVersion) {
-        resolutionStrategy.set(com.github.triplet.gradle.androidpublisher.ResolutionStrategy.IGNORE)
-      } else {
-        resolutionStrategy.set(com.github.triplet.gradle.androidpublisher.ResolutionStrategy.AUTO)
-      }
-    }
+    create("oss") { dimension = "locationProvider" }
   }
 }
 
@@ -234,9 +205,7 @@ kapt {
   correctErrorTypes = true
 }
 
-ksp {
-  arg("room.schemaLocation", "$projectDir/schemas")
-}
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 tasks.withType<Test> {
   systemProperties["junit.jupiter.execution.parallel.enabled"] = false
@@ -245,9 +214,7 @@ tasks.withType<Test> {
   maxParallelForks = 1
 }
 
-tasks.withType<JavaCompile>().configureEach {
-  options.isFork = true
-}
+tasks.withType<JavaCompile>().configureEach { options.isFork = true }
 
 dependencies {
   implementation(libs.bundles.kotlin)
@@ -271,9 +238,6 @@ dependencies {
   implementation(libs.bundles.jackson)
   implementation(libs.square.tape2)
   implementation(libs.timber)
-  implementation(libs.libsodium)
-  implementation(libs.apache.httpcore)
-  implementation(libs.commons.codec)
   implementation(libs.bundles.androidx.room)
   implementation(libs.bundles.objectbox.migration)
   implementation(libs.kotlin.datetime)
@@ -284,7 +248,6 @@ dependencies {
   implementation(libs.bouncycastle)
 
   // Widget libraries
-  implementation(libs.widgets.materialdrawer) { artifact { type = "aar" } }
   implementation(libs.widgets.materialize) { artifact { type = "aar" } }
 
   // These Java EE libs are no longer included in JDKs, so we include explicitly
@@ -301,9 +264,12 @@ dependencies {
   testImplementation(libs.kotlin.coroutines.test)
 
   androidTestImplementation(libs.bundles.androidx.test)
-  androidTestImplementation(libs.barista) {
-    exclude("org.jetbrains.kotlin")
-  }
+
+  // Hilt Android Testing
+  androidTestImplementation(libs.hilt.android.testing)
+  kaptAndroidTest(libs.hilt.compiler)
+
+  androidTestImplementation(libs.barista) { exclude("org.jetbrains.kotlin") }
   androidTestImplementation(libs.okhttp.mockwebserver)
   androidTestImplementation(libs.bundles.kmqtt)
   androidTestImplementation(libs.square.leakcanary)
@@ -311,10 +277,4 @@ dependencies {
   androidTestUtil(libs.bundles.androidx.test.util)
 
   coreLibraryDesugaring(libs.desugar)
-}
-
-// Publishing
-// Handled now in the android / playConfigs block
-play {
-  enabled.set(false)
 }

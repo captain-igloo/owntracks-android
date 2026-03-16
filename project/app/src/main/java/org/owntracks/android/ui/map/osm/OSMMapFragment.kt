@@ -2,7 +2,6 @@ package org.owntracks.android.ui.map.osm
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.drawable.BitmapDrawable
 import android.hardware.display.DisplayManager
 import android.location.Location
 import android.os.Build
@@ -15,9 +14,12 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.toBitmap
-import androidx.lifecycle.Observer
+import androidx.core.graphics.drawable.toDrawable
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.DelayedMapListener
 import org.osmdroid.events.MapListener
@@ -55,29 +57,33 @@ import timber.log.Timber
 class OSMMapFragment
 internal constructor(
     private val preferences: Preferences,
-    contactImageBindingAdapter: ContactImageBindingAdapter
+    contactImageBindingAdapter: ContactImageBindingAdapter,
 ) : MapFragment<OsmMapFragmentBinding>(contactImageBindingAdapter, preferences) {
   override val layout: Int
     get() = R.layout.osm_map_fragment
 
   private val osmMapLocationSource: IMyLocationProvider =
       object : IMyLocationProvider {
-        private var locationObserver: Observer<Location>? = null
+        private var locationJob: Job? = null
 
         override fun startLocationProvider(myLocationConsumer: IMyLocationConsumer?): Boolean {
           val locationProvider: IMyLocationProvider = this
-          locationObserver =
-              Observer { location: Location ->
+          locationJob =
+              viewLifecycleOwner.lifecycleScope.launch {
+                viewModel.currentLocation.collect { location ->
+                  if (location != null) {
                     onLocationObserved(location) {
                       myLocationConsumer?.onLocationChanged(location, locationProvider)
                     }
                   }
-                  .apply { viewModel.currentLocation.observe(viewLifecycleOwner, this) }
+                }
+              }
           return true
         }
 
         override fun stopLocationProvider() {
-          locationObserver?.run(viewModel.currentLocation::removeObserver)
+          locationJob?.cancel()
+          locationJob = null
         }
 
         override fun getLastKnownLocation(): Location? {
@@ -94,7 +100,7 @@ internal constructor(
   override fun onCreateView(
       inflater: LayoutInflater,
       container: ViewGroup?,
-      savedInstanceState: Bundle?
+      savedInstanceState: Bundle?,
   ): View {
     Configuration.getInstance().apply {
       load(requireContext(), PreferenceManager.getDefaultSharedPreferences(requireContext()))
@@ -291,6 +297,7 @@ internal constructor(
       val existingMarker: Marker? = overlays.firstOrNull { it is Marker && it.id == id } as Marker?
       if (existingMarker != null) {
         existingMarker.position = latLng.toGeoPoint()
+        existingMarker.icon = image.toDrawable(resources)
       } else if (activity?.isDestroyed == false) {
         /*
         There's a race condition where in the time it takes to create all the markers, the
@@ -303,6 +310,7 @@ internal constructor(
             Marker(this).apply {
               this.id = id
               position = latLng.toGeoPoint()
+              icon = image.toDrawable(resources)
               infoWindow = null
               setOnMarkerClickListener { marker, _ ->
                 onMarkerClicked(marker.id)
@@ -312,9 +320,6 @@ internal constructor(
             },
         )
       }
-      overlays
-          .firstOrNull { it is Marker && it.id == id }
-          ?.run { (this as Marker).icon = BitmapDrawable(resources, image) }
       invalidate()
     }
   }
@@ -330,6 +335,9 @@ internal constructor(
     super.onResume()
     mapView?.onResume()
     setMapStyle()
+    viewModel.mapStartingLocationOnResume()?.run {
+      mapView?.controller?.animateTo(latLng.toGeoPoint(), zoom, 0L, rotation)
+    }
   }
 
   override fun onPause() {
@@ -353,7 +361,60 @@ internal constructor(
     compassOrientationMapListener.onScroll(null)
   }
 
-  override fun drawRegions(regions: Set<WaypointModel>) {
+  override fun addRegion(waypoint: WaypointModel) {
+    if (preferences.showRegionsOnMap) {
+      mapView?.run {
+        Timber.d("Adding region ${waypoint.id} to map")
+        val regionPolygon = createPolygon(this, waypoint)
+        val regionMarker = createMarker(this, waypoint)
+        overlays.addAll(0, listOf(regionPolygon, regionMarker))
+      }
+    }
+  }
+
+  override fun deleteRegion(waypoint: WaypointModel) {
+    if (preferences.showRegionsOnMap) {
+      mapView?.run {
+        Timber.d("Removing region ${waypoint.id} from map")
+        overlays
+            .filterIsInstance<Marker>()
+            .firstOrNull { it.id == "regionmarker-${waypoint.id}" }
+            ?.let(overlays::remove)
+        overlays
+            .filterIsInstance<Polygon>()
+            .firstOrNull { it.id == "regionpolygon-${waypoint.id}" }
+            ?.let(overlays::remove)
+      }
+    }
+  }
+
+  override fun updateRegion(waypoint: WaypointModel) {
+    if (preferences.showRegionsOnMap) {
+      mapView?.run {
+        Timber.d("Updating region ${waypoint.id} on map")
+        overlays
+            .filterIsInstance<Polygon>()
+            .firstOrNull { it.id == "regionpolygon-${waypoint.id}" }
+            ?.apply {
+              points =
+                  Polygon.pointsAsCircle(
+                      waypoint.getLocation().toLatLng().toGeoPoint(),
+                      waypoint.geofenceRadius.toDouble(),
+                  )
+              fillPaint.color = getRegionColor()
+            }
+        overlays
+            .filterIsInstance<Marker>()
+            .firstOrNull { it.id == "regionmarker-${waypoint.id}" }
+            ?.apply {
+              position = waypoint.getLocation().toLatLng().toGeoPoint()
+              title = waypoint.description
+            }
+      }
+    }
+  }
+
+  override fun reDrawRegions(regions: Set<WaypointModel>) {
     if (preferences.showRegionsOnMap) {
       mapView?.run {
         Timber.d("Drawing ${regions.size} regions on map")
@@ -369,37 +430,8 @@ internal constructor(
         regions
             .flatMap { region ->
               listOf(
-                  Polygon(this).apply {
-                    id = "regionpolygon-${region.id}"
-                    points =
-                        Polygon.pointsAsCircle(
-                                region.getLocation().toLatLng().toGeoPoint(),
-                                region.geofenceRadius.toDouble(),
-                            )
-                            .filter {
-                              (TileSystemWebMercator.MinLatitude..TileSystemWebMercator.MaxLatitude)
-                                  .contains(it.latitude) &&
-                                  (TileSystemWebMercator.MinLongitude..TileSystemWebMercator
-                                              .MaxLongitude)
-                                      .contains(it.longitude)
-                            }
-
-                    fillPaint.color = getRegionColor()
-                    outlinePaint.strokeWidth = 1f
-                    setOnClickListener { _, mapView, _ ->
-                      mapView.overlays
-                          .filterIsInstance<Marker>()
-                          .first { it.id == "regionmarker-${region.id}" }
-                          .showInfoWindow()
-                      true
-                    }
-                  },
-                  Marker(this).apply {
-                    id = "regionmarker-${region.id}"
-                    position = region.getLocation().toLatLng().toGeoPoint()
-                    title = region.description
-                    setInfoWindow(MarkerInfoWindow(R.layout.osm_region_bubble, this@run))
-                  },
+                  createPolygon(this, region),
+                  createMarker(this, region),
               )
             }
             .let { overlays.addAll(0, it) }
@@ -417,8 +449,43 @@ internal constructor(
     }
   }
 
+  fun createPolygon(mapView: MapView, waypoint: WaypointModel): Polygon {
+    return Polygon(mapView).apply {
+      id = "regionpolygon-${waypoint.id}"
+      points =
+          Polygon.pointsAsCircle(
+                  waypoint.getLocation().toLatLng().toGeoPoint(),
+                  waypoint.geofenceRadius.toDouble(),
+              )
+              .filter {
+                (TileSystemWebMercator.MinLatitude..TileSystemWebMercator.MaxLatitude).contains(
+                    it.latitude) &&
+                    (TileSystemWebMercator.MinLongitude..TileSystemWebMercator.MaxLongitude)
+                        .contains(it.longitude)
+              }
+      fillPaint.color = getRegionColor()
+      outlinePaint.strokeWidth = 1f
+      setOnClickListener { _, mapView, _ ->
+        mapView.overlays
+            .filterIsInstance<Marker>()
+            .first { it.id == "regionmarker-${waypoint.id}" }
+            .showInfoWindow()
+        true
+      }
+    }
+  }
+
+  fun createMarker(mapView: MapView, waypoint: WaypointModel): Marker {
+    return Marker(mapView).apply {
+      id = "regionmarker-${waypoint.id}"
+      position = waypoint.getLocation().toLatLng().toGeoPoint()
+      title = waypoint.description
+      setInfoWindow(MarkerInfoWindow(R.layout.osm_region_bubble, mapView))
+    }
+  }
+
   companion object {
-    const val MIN_ZOOM_LEVEL: Double = 5.0
+    const val MIN_ZOOM_LEVEL: Double = 1.0
     const val MAX_ZOOM_LEVEL: Double = 21.0
   }
 }

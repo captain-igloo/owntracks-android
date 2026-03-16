@@ -1,6 +1,6 @@
 # This flow is designed to be used to update the production and beta tracks on the Play store. It does this by promoting the beta track build to production, triggered by the creation of a release tag.
 # As per the beta build, this does not actually do a build / upload, it simply promotes whatever's in beta to production. Best to create the
-name: Android Release
+name: Tag Triggered Release
 
 on:
   push:
@@ -10,17 +10,17 @@ on:
       - release-test-tag
 
 env:
-  # Config cache is false for releases, because tripleT doesn't work with it.
-  GRADLE_OPTS: "-Dorg.gradle.daemon=true -Dorg.gradle.configuration-cache=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.jvmargs='-Xmx3096M -Dkotlin.daemon.jvm.options=-Xmx2048M -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8 -XX:+UseParallelGC'"
+  # Config cache can be enabled now that we're not using Triplet
+  GRADLE_OPTS: "-Dorg.gradle.daemon=true -Dorg.gradle.configuration-cache=true -Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.jvmargs='-Xmx3096M -Dkotlin.daemon.jvm.options=-Xmx2048M -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8 -XX:+UseParallelGC'"
 
 jobs:
   release:
-    name: Create GH release and promote Play store beta to release
-    runs-on: ubuntu-22.04
+    name: Create GH release and promote Play store release
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
       # We need to find out if there's been a previous beta release for this tag, as it'll affect which google play track we promote from
       - uses: octokit/request-action@v2.x
         name: Find beta tags if this is a prod release
@@ -39,21 +39,18 @@ jobs:
           echo "beta_tag_count=${LENGTH}"
           echo "beta_tag_count=$LENGTH" >> "${GITHUB_OUTPUT}"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Ruby and Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
 
-      - name: Install python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r .github/google-play-api/requirements.txt
-
-      # Step outputs are strings, so we need to use fromJSON to coerce to an integer
-      - name: Get current version code from internal track
+      - name: Get internal track current version code
         if: ${{ contains(github.ref_name, 'beta') || fromJSON(steps.tagCount.outputs.beta_tag_count) == 0 }}
         env:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}
         run: |
-          VERSION_CODE="$(python .github/google-play-api/google-play-api.py internal)"
+          VERSION_CODE="$(bundle exec fastlane get_version_code track:internal | sed -n "s/.*Found '\([0-9]*\)'.*/\1/p")"
+          echo "Latest version code is: $VERSION_CODE"
           echo VERSION_CODE="${VERSION_CODE}" >> "${GITHUB_ENV}"
 
       - name: Get current version code from beta track
@@ -61,7 +58,8 @@ jobs:
         env:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}
         run: |
-          VERSION_CODE="$(python .github/google-play-api/google-play-api.py beta)"
+          VERSION_CODE="$(bundle exec fastlane get_version_code track:beta | sed -n "s/.*Found '\([0-9]*\)'.*/\1/p")"
+          echo "Latest version code is: $VERSION_CODE"
           echo VERSION_CODE="${VERSION_CODE}" >> "${GITHUB_ENV}"
 
       - name: Create keystore
@@ -69,6 +67,13 @@ jobs:
           echo -n "${KEYSTORE_BASE64}" | base64 -d > project/owntracks.release.keystore.jks
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Assert that version code is valid
+        run: |
+          if ! [[ "${VERSION_CODE}" =~ ^[0-9]+$ ]]; then
+            echo "VERSION_CODE is not a valid integer: ${VERSION_CODE}"
+            exit 1
+          fi
 
       - name: Build release APKs
         uses: ./.github/actions/gradle-task
@@ -80,7 +85,7 @@ jobs:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}
 
       - name: Extract changelog
-        run: awk '/^## / { if (p) {exit}; { p=1; next} } p' CHANGELOG.md > this_release_changelog.md
+        run: awk '/^## / { if (p) {exit}; { p=1; next} } p' CHANGELOG.md > fastlane/metadata/android/en-US/changelogs/${{ env.VERSION_CODE}}.txt
 
       - name: Move APKs to project root
         run: |
@@ -94,7 +99,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          body_path: ./this_release_changelog.md
+          body_path: ./fastlane/metadata/android/en-US/changelogs/${{ env.VERSION_CODE}}.txt
           name: ${{ github.ref_name }}
           draft: true
           prerelease: ${{ contains(github.ref_name, 'beta') }}
@@ -102,22 +107,22 @@ jobs:
             ./owntracks-release-*.apk
 
       - name: Promote play store beta from internal
-        run: ./gradlew promoteGmsReleaseArtifact --from-track internal --promote-track beta --release-status completed
-        working-directory: project
+        run: bundle exec fastlane promote_internal_to_beta
+        working-directory: fastlane
         if: ${{ contains(github.ref_name, 'beta') }}
         env:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}
 
       - name: Promote play store production from beta
-        run: ./gradlew promoteArtifact --from-track beta --promote-track production --release-status inProgress --user-fraction .1
-        working-directory: project
+        run: bundle exec fastlane promote_beta_to_production rollout:0.1
+        working-directory: fastlane
         if: ${{ !contains(github.ref_name, 'beta') && steps.tagCount.outputs.beta_tag_count > 0 }}
         env:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}
 
       - name: Promote play store production from internal
-        run: ./gradlew promoteArtifact --from-track internal --promote-track production --release-status inProgress --user-fraction .1
-        working-directory: project
+        run: bundle exec fastlane promote_internal_to_production rollout:0.1
+        working-directory: fastlane
         if: ${{ !contains(github.ref_name, 'beta') && steps.tagCount.outputs.beta_tag_count == 0 }}
         env:
           ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.GOOGLE_CLOUD_SERVICE_ACCOUNT_CREDENTIALS }}

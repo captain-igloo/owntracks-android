@@ -5,12 +5,20 @@ import android.os.Bundle
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.activity.addCallback
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.databinding.DataBindingUtil
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.viewpager2.widget.ViewPager2
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 import org.owntracks.android.R
 import org.owntracks.android.databinding.UiWelcomeBinding
 import org.owntracks.android.preferences.Preferences
@@ -40,6 +48,7 @@ abstract class BaseWelcomeActivity : AppCompatActivity() {
   @Inject lateinit var preferences: Preferences
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     if (preferences.setupCompleted) {
       startActivity(
@@ -68,11 +77,25 @@ abstract class BaseWelcomeActivity : AppCompatActivity() {
                   flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
                 })
           }
+
+          // Handle window insets for edge-to-edge
+          ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            // Apply top and bottom insets to the root layout
+            view.updatePadding(top = insets.top, bottom = insets.bottom)
+
+            WindowInsetsCompat.CONSUMED
+          }
         }
 
-    viewModel.currentFragmentPosition.observe(this) { position: Int ->
-      binding.viewPager.currentItem = position
-      setPagerIndicator(position)
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.currentFragmentPosition.collect { position ->
+          binding.viewPager.currentItem = position
+          setPagerIndicator(position)
+        }
+      }
     }
 
     buildPagerIndicator()

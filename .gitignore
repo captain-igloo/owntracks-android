@@ -63,3 +63,5 @@ project/app/objectbox-*.dll
 project/localscripts
 
 jacoco.exec
+.env
+fastlane/report.xml

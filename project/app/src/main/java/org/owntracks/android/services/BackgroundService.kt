@@ -45,10 +45,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import org.owntracks.android.App
-import org.owntracks.android.App.Companion.NOTIFICATION_GROUP_EVENTS
-import org.owntracks.android.App.Companion.NOTIFICATION_ID_EVENT_GROUP
-import org.owntracks.android.App.Companion.NOTIFICATION_ID_ONGOING
+import org.owntracks.android.BaseApp.Companion.NOTIFICATION_CHANNEL_EVENTS
+import org.owntracks.android.BaseApp.Companion.NOTIFICATION_GROUP_EVENTS
+import org.owntracks.android.BaseApp.Companion.NOTIFICATION_ID_EVENT_GROUP
+import org.owntracks.android.BaseApp.Companion.NOTIFICATION_ID_ONGOING
 import org.owntracks.android.R
 import org.owntracks.android.data.repos.ContactsRepo
 import org.owntracks.android.data.repos.EndpointStateRepo
@@ -145,6 +145,9 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
         }
       }
 
+  // Significant motion sensor for triggering location requests when device movement is detected
+  private lateinit var significantMotionSensor: SignificantMotionSensor
+
   @EntryPoint
   @InstallIn(SingletonComponent::class)
   internal interface ServiceEntrypoint {
@@ -159,21 +162,31 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     preferences = entrypoint.preferences()
     endpointStateRepo = entrypoint.endpointStateRepo()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      Timber.v(
+      Timber.i(
           "Permissions. ACCESS_BACKGROUND_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)==PERMISSION_GRANTED}")
     }
-    Timber.v(
+    Timber.i(
         "Permissions. ACCESS_COARSE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)==PERMISSION_GRANTED}")
-    Timber.v(
+    Timber.i(
         "Permissions. ACCESS_FINE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)==PERMISSION_GRANTED}")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      Timber.v(
+      Timber.i(
           "Permissions. POST_NOTIFICATIONS: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)==PERMISSION_GRANTED}")
     }
 
     super.onCreate()
 
     preferences.registerOnPreferenceChangedListener(this)
+
+    // Initialize significant motion sensor
+    significantMotionSensor =
+        SignificantMotionSensor(
+            this,
+            preferences,
+            locationProviderClient,
+            requirementsChecker,
+            callbackForReportType[MessageLocation.ReportType.SIGNIFICANT_MOTION]!!.value,
+            runThingsOnOtherThreads.getBackgroundLooper())
 
     registerReceiver(
         powerBroadcastReceiver,
@@ -195,7 +208,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
         launch {
           waypointsRepo.migrationCompleteFlow.collect {
             if (it) {
-              waypointsRepo.operations.collect { waypointOperation ->
+              waypointsRepo.repoChangedEvent.collect { waypointOperation ->
                 when (waypointOperation) {
                   is WaypointsRepo.WaypointOperation.Insert ->
                       locationProcessor.publishWaypointMessage(waypointOperation.waypoint)
@@ -242,6 +255,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     Timber.v("Backgroundservice onDestroy")
     stopForeground(STOP_FOREGROUND_REMOVE)
     unregisterReceiver(powerBroadcastReceiver)
+    significantMotionSensor.cancel()
     preferences.unregisterOnPreferenceChangedListener(this)
     messageProcessor.stopSendingMessages()
     super.onDestroy()
@@ -359,6 +373,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     startForegroundService()
     setupLocationRequest()
     scheduler.scheduleLocationPing()
+    significantMotionSensor.setup()
     messageProcessor.initialize()
   }
 
@@ -443,7 +458,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     val summary = summaryAndInbox.first
     val inbox = summaryAndInbox.second
 
-    NotificationCompat.Builder(this, App.NOTIFICATION_CHANNEL_EVENTS)
+    NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_EVENTS)
         .setContentTitle(getString(R.string.events))
         .setContentText(summary)
         .setGroup(NOTIFICATION_GROUP_EVENTS) // same as group of single notifications
@@ -576,7 +591,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     if (requirementsChecker.hasLocationPermissions()) {
 
       withContext(ioDispatcher) {
-        val waypoints = waypointsRepo.all
+        val waypoints = waypointsRepo.getAll()
         Timber.i("Setting up geofences for ${waypoints.size} waypoints")
         val geofences =
             waypoints
@@ -642,6 +657,17 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     }
     if (properties.intersect(PREFERENCES_THAT_WIPE_QUEUE_AND_CONTACTS).isNotEmpty()) {
       lifecycleScope.launch { contactsRepo.clearAll() }
+    }
+    if (properties.contains(Preferences::experimentalFeatures.name)) {
+      // Handle significant motion sensor based on experimental feature toggle
+      if (preferences.experimentalFeatures.contains(
+          Preferences.EXPERIMENTAL_FEATURE_REQUEST_LOCATION_ON_SIGNIFICANT_MOTION)) {
+        Timber.d("Significant motion feature enabled, setting up sensor")
+        significantMotionSensor.setup()
+      } else {
+        Timber.d("Significant motion feature disabled, cancelling sensor")
+        significantMotionSensor.cancel()
+      }
     }
   }
 

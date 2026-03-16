@@ -6,17 +6,25 @@ import android.text.format.DateUtils
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.TextView
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.core.widget.addTextChangedListener
 import androidx.databinding.BindingAdapter
 import androidx.databinding.BindingConversion
 import androidx.databinding.DataBindingUtil
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import dagger.hilt.android.AndroidEntryPoint
 import java.text.DateFormat
 import java.time.Instant
+import kotlinx.coroutines.launch
 import org.owntracks.android.R
 import org.owntracks.android.databinding.UiWaypointBinding
 import org.owntracks.android.location.geofencing.Latitude
@@ -32,6 +40,7 @@ class WaypointActivity : AppCompatActivity() {
   private lateinit var textFields: List<TextInputEditText>
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 
     binding =
@@ -49,6 +58,13 @@ class WaypointActivity : AppCompatActivity() {
                 ?: run { longitude.error = getString(R.string.invalidLongitudeError) }
           }
           textFields.forEach { it.addTextChangedListener { setSaveButtonEnabledStatus() } }
+
+          // Handle window insets for edge-to-edge
+          ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            appbar.root.updatePadding(top = insets.top)
+            WindowInsetsCompat.CONSUMED
+          }
         }
 
     supportActionBar?.run {
@@ -58,7 +74,11 @@ class WaypointActivity : AppCompatActivity() {
 
     if (intent.hasExtra("waypointId")) {
       viewModel.loadWaypoint(intent.getLongExtra("waypointId", 0))
-      viewModel.waypoint.observe(this) { setDeleteButtonEnabledStatus() }
+      lifecycleScope.launch {
+        repeatOnLifecycle(Lifecycle.State.STARTED) {
+          viewModel.waypoint.collect { setDeleteButtonEnabledStatus() }
+        }
+      }
     }
   }
 
