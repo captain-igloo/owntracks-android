@@ -2,6 +2,7 @@ package org.owntracks.android.services
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.PendingIntent
@@ -17,7 +18,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.os.Process
+import android.os.SystemClock
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.StyleSpan
@@ -41,6 +42,7 @@ import java.util.stream.Collectors
 import javax.inject.Inject
 import javax.inject.Named
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -137,6 +139,7 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
   private val activityManager by lazy {
     this.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
   }
+  private val alarmManager by lazy { this.getSystemService(Context.ALARM_SERVICE) as AlarmManager }
   private val powerStateLogger by lazy { PowerStateLogger(this.applicationContext) }
   private val powerBroadcastReceiver =
       object : BroadcastReceiver() {
@@ -163,15 +166,19 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     endpointStateRepo = entrypoint.endpointStateRepo()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       Timber.i(
-          "Permissions. ACCESS_BACKGROUND_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)==PERMISSION_GRANTED}")
+          "Permissions. ACCESS_BACKGROUND_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)==PERMISSION_GRANTED}"
+      )
     }
     Timber.i(
-        "Permissions. ACCESS_COARSE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)==PERMISSION_GRANTED}")
+        "Permissions. ACCESS_COARSE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)==PERMISSION_GRANTED}"
+    )
     Timber.i(
-        "Permissions. ACCESS_FINE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)==PERMISSION_GRANTED}")
+        "Permissions. ACCESS_FINE_LOCATION: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)==PERMISSION_GRANTED}"
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       Timber.i(
-          "Permissions. POST_NOTIFICATIONS: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)==PERMISSION_GRANTED}")
+          "Permissions. POST_NOTIFICATIONS: ${ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)==PERMISSION_GRANTED}"
+      )
     }
 
     super.onCreate()
@@ -186,7 +193,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             locationProviderClient,
             requirementsChecker,
             callbackForReportType[MessageLocation.ReportType.SIGNIFICANT_MOTION]!!.value,
-            runThingsOnOtherThreads.getBackgroundLooper())
+            runThingsOnOtherThreads.getBackgroundLooper(),
+        )
 
     registerReceiver(
         powerBroadcastReceiver,
@@ -198,7 +206,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           }
           addAction(Intent.ACTION_SCREEN_ON)
           addAction(Intent.ACTION_SCREEN_OFF)
-        })
+        },
+    )
     powerStateLogger.logPowerState("serviceOnCreate")
 
     lifecycleScope.launch {
@@ -238,7 +247,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             ongoingNotification.setEndpointState(
                 it,
                 if (preferences.mode == ConnectionMode.MQTT) preferences.host
-                else preferences.url.toHttpUrlOrNull()?.host ?: "")
+                else preferences.url.toHttpUrlOrNull()?.host ?: "",
+            )
           }
         }
         launch {
@@ -270,6 +280,61 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
   }
 
   /**
+   * Asks to be started again shortly after the user swipes the app off the Recents screen.
+   *
+   * On AOSP this callback is informational: a started service with an ongoing notification survives
+   * task removal, and nothing here is needed. It is for the manufacturers who treat a swipe as
+   * something close to a force-stop, killing the process and dropping the [START_STICKY] restart
+   * that would otherwise bring the service — and the MQTT connection with it — back. On those
+   * devices this is the difference between reconnecting seconds later and staying disconnected
+   * until the user next opens the app.
+   *
+   * Deliberately not conditional on any preference: the service was running when the task was
+   * removed, and on a stock device it would still be running afterwards. This only restores that.
+   *
+   * The alarm is what makes it work at all — it lives in the system, so it survives the process
+   * being killed a moment later, and [AlarmManager.setAndAllowWhileIdle] puts the app briefly on
+   * the temporary power exemption list when it fires, which is what allows the resulting start to
+   * promote itself to the foreground. Best-effort even so: a manufacturer that really does treat a
+   * swipe as a force-stop cancels the app's alarms along with everything else, and nothing this
+   * process can do before it dies will survive that.
+   */
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    Timber.i("Task removed, scheduling a service restart in $TASK_REMOVED_RESTART_DELAY")
+    try {
+      alarmManager.setAndAllowWhileIdle(
+          AlarmManager.ELAPSED_REALTIME_WAKEUP,
+          SystemClock.elapsedRealtime() + TASK_REMOVED_RESTART_DELAY.inWholeMilliseconds,
+          restartAfterTaskRemovedIntent(),
+      )
+    } catch (e: Exception) {
+      // Nothing here is worth taking the process down for on the way out.
+      Timber.e(e, "Unable to schedule a service restart after task removal")
+    }
+    super.onTaskRemoved(rootIntent)
+  }
+
+  /**
+   * A start request for this service, deliverable by the system on our behalf once this process is
+   * gone.
+   */
+  private fun restartAfterTaskRemovedIntent(): PendingIntent =
+      Intent(applicationContext, BackgroundService::class.java)
+          .setAction(INTENT_ACTION_RESTART_AFTER_TASK_REMOVED)
+          .let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              PendingIntent.getForegroundService(
+                  applicationContext,
+                  0,
+                  it,
+                  UPDATE_CURRENT_INTENT_FLAGS,
+              )
+            } else {
+              PendingIntent.getService(applicationContext, 0, it, UPDATE_CURRENT_INTENT_FLAGS)
+            }
+          }
+
+  /**
    * We've been sent a start command with an intent, which usually means we've got to do something
    * depending on the action
    *
@@ -284,14 +349,18 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             if (requirementsChecker.hasLocationPermissions()) {
               locationProviderClient.singleHighAccuracyLocation(
                   callbackForReportType[MessageLocation.ReportType.USER]!!.value,
-                  runThingsOnOtherThreads.getBackgroundLooper())
+                  runThingsOnOtherThreads.getBackgroundLooper(),
+              )
             }
           }
           return
         }
         // This comes from the [GeofencingBroadcastReceiver]
         INTENT_ACTION_SEND_EVENT_CIRCULAR -> {
-          lifecycleScope.launch { onGeofencingEvent(fromIntent(intent)) }
+          val event = fromIntent(intent)
+          if (!event.hasError() && !event.triggeringGeofences.isNullOrEmpty()) {
+            lifecycleScope.launch { onGeofencingEvent(fromIntent(intent)) }
+          }
           return
         }
 
@@ -320,26 +389,32 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           notificationManagerCompat.cancel(BACKGROUND_LOCATION_RESTRICTION_NOTIFICATION_TAG, 0)
           return
         }
+        // The restart we asked for in onTaskRemoved. Sets the service up from scratch, because the
+        // usual reason for getting here is that the process was killed and this one is new. Doing
+        // it again in the process that scheduled it — a device where the swipe did not kill
+        // anything — is harmless: everything setupAndStartService does can be repeated.
+        INTENT_ACTION_RESTART_AFTER_TASK_REMOVED -> {
+          setupAndStartService()
+          return
+        }
         INTENT_ACTION_BOOT_COMPLETED,
         INTENT_ACTION_PACKAGE_REPLACED -> {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (!requirementsChecker.hasBackgroundLocationPermission() &&
-                !hasBeenStartedExplicitly) {
+            if (
+                !requirementsChecker.hasBackgroundLocationPermission() && !hasBeenStartedExplicitly
+            ) {
               notifyUserOfBackgroundLocationRestriction()
             }
           }
           setupAndStartService()
           return
         }
-        INTENT_ACTION_EXIT -> {
-          exit()
-          return
-        }
         else -> {}
       }
     } else {
       Timber.d(
-          "no intent or action provided, setting up location request and scheduling location ping.")
+          "no intent or action provided, setting up location request and scheduling location ping."
+      )
       hasBeenStartedExplicitly = true
       setupAndStartService()
     }
@@ -351,18 +426,21 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
         startForeground(
             NOTIFICATION_ID_ONGOING,
             ongoingNotification.getNotification(),
-            FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
       } catch (e: ForegroundServiceStartNotAllowedException) {
         Timber.e(
             e,
-            "Foreground service start not allowed. backgroundRestricted=${activityManager.isBackgroundRestricted}")
+            "Foreground service start not allowed. backgroundRestricted=${activityManager.isBackgroundRestricted}",
+        )
         return
       }
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       startForeground(
           NOTIFICATION_ID_ONGOING,
           ongoingNotification.getNotification(),
-          FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+          FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+      )
     } else {
       startForeground(NOTIFICATION_ID_ONGOING, ongoingNotification.getNotification())
     }
@@ -377,16 +455,11 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     messageProcessor.initialize()
   }
 
-  private fun exit() {
-    Timber.v("exit() called. Stopping service and process.")
-    stopSelf()
-    scheduler.cancelAllTasks()
-    Process.killProcess(Process.myPid())
-  }
-
   private fun notifyUserOfBackgroundLocationRestriction() {
-    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-        PackageManager.PERMISSION_GRANTED) {
+    if (
+        ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+    ) {
       return
     }
     val activityLaunchIntent =
@@ -398,7 +471,9 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     val notificationTitle = getString(R.string.backgroundLocationRestrictionNotificationTitle)
     val notification =
         NotificationCompat.Builder(
-                applicationContext, GeocoderProvider.ERROR_NOTIFICATION_CHANNEL_ID)
+                applicationContext,
+                GeocoderProvider.ERROR_NOTIFICATION_CHANNEL_ID,
+            )
             .setContentTitle(notificationTitle)
             .setContentText(notificationText)
             .setAutoCancel(true)
@@ -406,19 +481,29 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             .setStyle(NotificationCompat.BigTextStyle().bigText(notificationText))
             .setContentIntent(
                 PendingIntent.getActivity(
-                    applicationContext, 0, activityLaunchIntent, UPDATE_CURRENT_INTENT_FLAGS))
+                    applicationContext,
+                    0,
+                    activityLaunchIntent,
+                    UPDATE_CURRENT_INTENT_FLAGS,
+                )
+            )
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
             .build()
     notificationManagerCompat.notify(
-        BACKGROUND_LOCATION_RESTRICTION_NOTIFICATION_TAG, 0, notification)
+        BACKGROUND_LOCATION_RESTRICTION_NOTIFICATION_TAG,
+        0,
+        notification,
+    )
   }
 
   fun sendEventNotification(message: MessageTransition) {
     Timber.d("Sending event notification for $message")
-    if (!preferences.notificationEvents ||
-        ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED) {
+    if (
+        !preferences.notificationEvents ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+    ) {
       return
     }
     val contact = contactsRepo.getById(message.getContactId())
@@ -431,7 +516,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
               R.string.transitionEntering
             } else {
               R.string.transitionLeaving
-            })
+            }
+        )
     val eventText = "$transitionText $location"
     val whenStr = formatDate(timestampInMs)
     // Need to lock to prevent "clear()" being called while we're adding to it
@@ -443,14 +529,17 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
                     StyleSpan(Typeface.BOLD),
                     0,
                     whenStr.length + 1,
-                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-              })
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+              }
+          )
           Timber.v("groupedNotifications: ${activeNotifications.size}")
           val summary =
               resources.getQuantityString(
                   R.plurals.notificationEventsTitle,
                   activeNotifications.size,
-                  activeNotifications.size)
+                  activeNotifications.size,
+              )
           val inbox = NotificationCompat.InboxStyle().setSummaryText(summary)
           activeNotifications.forEach { inbox.addLine(it) }
           Pair(summary, inbox)
@@ -476,14 +565,18 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
                 this,
                 System.currentTimeMillis().toInt() / 1000,
                 Intent(this, MapActivity::class.java),
-                UPDATE_CURRENT_INTENT_FLAGS))
+                UPDATE_CURRENT_INTENT_FLAGS,
+            )
+        )
         .setDeleteIntent(
             PendingIntent.getService(
                 this,
                 1,
                 Intent(this, BackgroundService::class.java)
                     .setAction(INTENT_ACTION_CLEAR_NOTIFICATIONS),
-                UPDATE_CURRENT_INTENT_FLAGS))
+                UPDATE_CURRENT_INTENT_FLAGS,
+            )
+        )
         .build()
         .run {
           notificationManagerCompat
@@ -502,9 +595,11 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
       Timber.e("geofencingEvent hasError: ${event.errorCode}")
       return
     }
-    if (event.geofenceTransition == null ||
-        event.triggeringGeofences == null ||
-        event.triggeringLocation == null) {
+    if (
+        event.geofenceTransition == null ||
+            event.triggeringGeofences == null ||
+            event.triggeringLocation == null
+    ) {
       Timber.e("geofencingEvent has no transition or trigger")
       return
     }
@@ -516,7 +611,11 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           waypointsRepo.get(requestId.toLong())?.run {
             Timber.d("onWaypointTransition triggered by geofencing event")
             locationProcessor.onWaypointTransition(
-                this, event.triggeringLocation, transition, MessageTransition.TRIGGER_CIRCULAR)
+                this,
+                event.triggeringLocation,
+                transition,
+                MessageTransition.TRIGGER_CIRCULAR,
+            )
           } ?: run { Timber.e("waypoint id $requestId not found for geofence event") }
         } catch (e: NumberFormatException) {
           Timber.e("$requestId from Geofencing event is not a valid request id")
@@ -529,7 +628,9 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     if (requirementsChecker.hasLocationPermissions()) {
       Timber.d("On demand location request")
       locationProviderClient.singleHighAccuracyLocation(
-          callbackForReportType[reportType]!!.value, runThingsOnOtherThreads.getBackgroundLooper())
+          callbackForReportType[reportType]!!.value,
+          runThingsOnOtherThreads.getBackgroundLooper(),
+      )
     } else {
       Timber.e("missing location permission")
     }
@@ -557,7 +658,18 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           } else {
             interval = Duration.ofSeconds(preferences.locatorInterval.toLong())
             smallestDisplacement = preferences.locatorDisplacement.toFloat()
-            priority = preferences.locatorPriority ?: LocatorPriority.BalancedPowerAccuracy
+            // QPR1 (where balanced-accuracy stopped using GNSS, per #2155) isn't separately
+            // detectable from the Android 16 GA release, so we gate on Android 16+ generally.
+            val useGnss =
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA &&
+                    preferences.useGNSSInSignificantMonitoringMode
+            priority =
+                preferences.locatorPriority
+                  ?: if (useGnss) {
+                    LocatorPriority.HighAccuracy
+                  } else {
+                    LocatorPriority.BalancedPowerAccuracy
+                  }
           }
         }
 
@@ -574,13 +686,21 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           }
       val request =
           LocationRequest(
-              fastestInterval, smallestDisplacement, null, null, priority, interval, null)
+              fastestInterval,
+              smallestDisplacement,
+              null,
+              null,
+              priority,
+              interval,
+              null,
+          )
       Timber.d("location update request params: $request")
       locationProviderClient.flushLocations()
       locationProviderClient.requestLocationUpdates(
           request,
           callbackForReportType[MessageLocation.ReportType.DEFAULT]!!.value,
-          runThingsOnOtherThreads.getBackgroundLooper())
+          runThingsOnOtherThreads.getBackgroundLooper(),
+      )
       return Result.success(Unit)
     } else {
       return Result.failure(Exception("Missing location permission"))
@@ -604,7 +724,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
                       it.geofenceLongitude,
                       it.geofenceRadius.toFloat(),
                       Geofence.NEVER_EXPIRE,
-                      null)
+                      null,
+                  )
                 }
                 .toList()
         geofencingClient.removeGeofences(this@BackgroundService)
@@ -630,7 +751,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
           .run(ongoingNotification::setTitle)
     } else {
       Timber.v(
-          "Ignoring reverse geocode for $latLng: $reverseGeocodedText, because my lastPublished location is ${lastLocation?.toLatLng()}")
+          "Ignoring reverse geocode for $latLng: $reverseGeocodedText, because my lastPublished location is ${lastLocation?.toLatLng()}"
+      )
     }
   }
 
@@ -642,12 +764,16 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             Preferences::moveModeLocatorInterval.name,
             Preferences::pegLocatorFastestIntervalToInterval.name,
             Preferences::notificationHigherPriority.name,
-            Preferences::locatorPriority.name)
-    if (propertiesWeCareAbout
-        .stream()
-        .filter { o: String -> properties.contains(o) }
-        .collect(Collectors.toSet())
-        .isNotEmpty()) {
+            Preferences::locatorPriority.name,
+            Preferences::useGNSSInSignificantMonitoringMode.name,
+        )
+    if (
+        propertiesWeCareAbout
+            .stream()
+            .filter { o: String -> properties.contains(o) }
+            .collect(Collectors.toSet())
+            .isNotEmpty()
+    ) {
       Timber.d("locator preferences changed. Resetting location request.")
       setupLocationRequest()
     }
@@ -660,8 +786,11 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
     }
     if (properties.contains(Preferences::experimentalFeatures.name)) {
       // Handle significant motion sensor based on experimental feature toggle
-      if (preferences.experimentalFeatures.contains(
-          Preferences.EXPERIMENTAL_FEATURE_REQUEST_LOCATION_ON_SIGNIFICANT_MOTION)) {
+      if (
+          preferences.experimentalFeatures.contains(
+              Preferences.EXPERIMENTAL_FEATURE_REQUEST_LOCATION_ON_SIGNIFICANT_MOTION
+          )
+      ) {
         Timber.d("Significant motion feature enabled, setting up sensor")
         significantMotionSensor.setup()
       } else {
@@ -684,7 +813,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
             }
           }
         },
-        0)
+        0,
+    )
   }
 
   private val localServiceBinder: IBinder = LocalBinder()
@@ -710,9 +840,16 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
         "org.owntracks.android.CLEAR_EVENT_NOTIFICATIONS"
     private const val INTENT_ACTION_CLEAR_CONTACTS = "org.owntracks.android.CLEAR_CONTACTS"
     const val INTENT_ACTION_CHANGE_MONITORING = "org.owntracks.android.CHANGE_MONITORING"
-    private const val INTENT_ACTION_EXIT = "org.owntracks.android.EXIT"
+    private const val INTENT_ACTION_RESTART_AFTER_TASK_REMOVED =
+        "org.owntracks.android.RESTART_AFTER_TASK_REMOVED"
     private const val INTENT_ACTION_BOOT_COMPLETED = "android.intent.action.BOOT_COMPLETED"
     private const val INTENT_ACTION_PACKAGE_REPLACED = "android.intent.action.MY_PACKAGE_REPLACED"
+    /**
+     * Long enough that a manufacturer's task-removal cleanup has finished tearing the process down
+     * before the restart lands, short enough that the connection is only briefly gone.
+     */
+    private val TASK_REMOVED_RESTART_DELAY = 5.seconds
+
     const val UPDATE_CURRENT_INTENT_FLAGS =
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
   }
@@ -766,8 +903,8 @@ class BackgroundService : LifecycleService(), Preferences.OnPreferenceChangeList
                 } else {
                   ""
                 } +
-                "isInteractive=${powerManager.isInteractive} " +
-                "isIgnoringBatteryOptimizations=${powerManager.isIgnoringBatteryOptimizations(applicationContext.packageName)}")
+                "isInteractive=${powerManager.isInteractive} isIgnoringBatteryOptimizations=${powerManager.isIgnoringBatteryOptimizations(applicationContext.packageName)}"
+        )
       }
     }
   }

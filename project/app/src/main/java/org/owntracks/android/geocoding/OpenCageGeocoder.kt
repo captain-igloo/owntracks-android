@@ -3,11 +3,11 @@ package org.owntracks.android.geocoding
 import java.math.BigDecimal
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -16,6 +16,7 @@ import org.owntracks.android.model.messages.InstantEpochSecondsSerializer
 import org.owntracks.android.net.http.HttpMessageProcessorEndpoint
 import timber.log.Timber
 
+@OptIn(ExperimentalTime::class)
 class OpenCageGeocoder
 internal constructor(private val apiKey: String, private val httpClient: OkHttpClient) :
     CachingGeocoder() {
@@ -55,29 +56,30 @@ internal constructor(private val apiKey: String, private val httpClient: OkHttpC
             .build()
     return try {
       httpClient.newCall(request).execute().use { response ->
-        val responseBody = response.body?.string()
+        val responseBody = response.body.string()
         try {
           when (response.code) {
             200 -> {
-              responseBody?.let {
+              responseBody.let {
                 val deserializedOpenCageResponse = deserializeOpenCageResponse(it)
                 Timber.d("Opencage HTTP response: $it")
                 deserializedOpenCageResponse.formatted?.let { formatted ->
                   GeocodeResult.Formatted(formatted)
                 } ?: GeocodeResult.Empty
-              } ?: GeocodeResult.Empty
+              }
             }
             401 -> {
               val deserializedOpenCageResponse =
-                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody!!)
+                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody)
               tripResetTimestamp = Clock.System.now().plus(1.minutes)
               GeocodeResult.Fault.Error(
                   deserializedOpenCageResponse.status?.message ?: "No error message provided",
-                  tripResetTimestamp)
+                  tripResetTimestamp,
+              )
             }
             402 -> {
               val deserializedOpenCageResponse =
-                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody!!)
+                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody)
               Timber.d("Opencage HTTP response: $responseBody")
               Timber.w("Opencage quota exceeded")
               deserializedOpenCageResponse.rate?.let { rate ->
@@ -88,7 +90,7 @@ internal constructor(private val apiKey: String, private val httpClient: OkHttpC
             }
             403 -> {
               val deserializedOpenCageResponse =
-                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody!!)
+                  jsonMapper.decodeFromString<OpenCageResponse>(responseBody)
               Timber.e(responseBody)
               tripResetTimestamp = Clock.System.now().plus(1.minutes)
               if (deserializedOpenCageResponse.status?.message == "IP address rejected") {
@@ -105,7 +107,9 @@ internal constructor(private val apiKey: String, private val httpClient: OkHttpC
               tripResetTimestamp = Clock.System.now().plus(1.minutes)
               Timber.e("Unexpected response from Opencage: $response")
               GeocodeResult.Fault.Error(
-                  "status: ${response.code} $responseBody", tripResetTimestamp)
+                  "status: ${response.code} $responseBody",
+                  tripResetTimestamp,
+              )
             }
           }
         } catch (e: Exception) {
@@ -116,10 +120,10 @@ internal constructor(private val apiKey: String, private val httpClient: OkHttpC
     } catch (e: Exception) {
       tripResetTimestamp = Clock.System.now().plus(1.minutes)
       when (e) {
-        is SocketTimeoutException -> Timber.w("Error reverse geocoding from opencage. Timeout")
+        is SocketTimeoutException -> Timber.w("Error reverse geocoding from Opencage. Timeout")
         is UnknownHostException ->
-            Timber.w("Error reverse geocoding from opencage. Unable to resolve host")
-        else -> Timber.w(e, "Error reverse geocoding from opencage")
+            Timber.w("Error reverse geocoding from Opencage. Unable to resolve host")
+        else -> Timber.w(e, "Error reverse geocoding from Opencage")
       }
       GeocodeResult.Fault.ExceptionError(e, tripResetTimestamp)
     }

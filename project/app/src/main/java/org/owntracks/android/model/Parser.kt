@@ -4,9 +4,9 @@ import java.io.IOException
 import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.modules.SerializersModule
@@ -31,11 +31,12 @@ import org.owntracks.android.model.messages.MessageWaypointCollectionSerializer
 import org.owntracks.android.model.messages.MessageWaypoints
 import timber.log.Timber
 
+@OptIn(ExperimentalTime::class)
 @Singleton
 class Parser @Inject constructor(private val encryptionProvider: EncryptionProvider?) {
   private val serializersModule = SerializersModule {
     contextual(MessageWaypointCollectionSerializer)
-    contextual(kotlinx.datetime.Instant::class, InstantEpochSecondsSerializer)
+    contextual(Instant::class, InstantEpochSecondsSerializer)
     polymorphic(MessageBase::class) {
       subclass(MessageCard::class)
       subclass(MessageClear::class)
@@ -164,7 +165,9 @@ class Parser @Inject constructor(private val encryptionProvider: EncryptionProvi
     return if (a.size == 1 && a[0] is MessageEncrypted) {
       if (encryptionProvider == null || !encryptionProvider.isPayloadEncryptionEnabled) {
         throw EncryptionException(
-            "received encrypted message but payload encryption is not enabled", null)
+            "received encrypted message but payload encryption is not enabled",
+            null,
+        )
       }
       val encryptedMessage = a[0] as MessageEncrypted
       val decrypted: String = encryptionProvider.decrypt(encryptedMessage.data)
@@ -179,7 +182,9 @@ class Parser @Inject constructor(private val encryptionProvider: EncryptionProvi
     return if (message is MessageEncrypted) {
       if (encryptionProvider == null || !encryptionProvider.isPayloadEncryptionEnabled) {
         throw EncryptionException(
-            "received encrypted message but payload encryption is not enabled", null)
+            "received encrypted message but payload encryption is not enabled",
+            null,
+        )
       }
       val decrypted: String = encryptionProvider.decrypt(message.data)
       fromJson(decrypted)
@@ -210,8 +215,5 @@ class Parser @Inject constructor(private val encryptionProvider: EncryptionProvi
     }
   }
 
-  class EncryptionException internal constructor(s: String, cause: Throwable?) :
-      Exception(s, cause) {
-    constructor(s: String) : this(s, null)
-  }
+  class EncryptionException internal constructor(s: String, cause: Throwable?) : Exception(s, cause)
 }

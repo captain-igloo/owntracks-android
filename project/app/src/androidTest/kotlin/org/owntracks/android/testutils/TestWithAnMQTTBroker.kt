@@ -1,9 +1,9 @@
 package org.owntracks.android.testutils
 
 import androidx.test.espresso.IdlingResource
+import io.github.davidepianca98.mqtt.broker.Broker
+import io.github.davidepianca98.mqtt.packets.MQTTPacket
 import kotlinx.coroutines.DelicateCoroutinesApi
-import mqtt.broker.Broker
-import mqtt.packets.MQTTPacket
 import org.junit.After
 import org.junit.Before
 import org.owntracks.android.model.messages.MessageBase
@@ -25,13 +25,13 @@ interface TestWithAnMQTTBroker {
   fun MessageBase.sendFromBroker(
       broker: Broker,
       topicName: String = "owntracks/someuser/somedevice",
-      retain: Boolean = false
+      retain: Boolean = false,
   )
 
   fun <E : MessageBase> Collection<E>.sendFromBroker(
       broker: Broker,
       topicName: String = "owntracks/someuser/somedevice",
-      retain: Boolean = false
+      retain: Boolean = false,
   ) = forEach { it.sendFromBroker(broker, topicName, retain) }
 
   @DelicateCoroutinesApi fun startBroker()

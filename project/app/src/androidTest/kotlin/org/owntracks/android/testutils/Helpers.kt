@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTime::class)
+
 package org.owntracks.android.testutils
 
 import android.Manifest
@@ -37,7 +39,6 @@ import androidx.test.runner.lifecycle.Stage
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import com.adevinta.android.barista.interaction.BaristaDialogInteractions.clickDialogNegativeButton
 import com.adevinta.android.barista.interaction.BaristaDialogInteractions.clickDialogPositiveButton
-import com.adevinta.android.barista.interaction.BaristaEditTextInteractions
 import com.adevinta.android.barista.interaction.BaristaEditTextInteractions.writeTo
 import com.adevinta.android.barista.interaction.PermissionGranter
 import java.io.BufferedInputStream
@@ -47,10 +48,11 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import junit.framework.AssertionFailedError
 import kotlin.random.Random
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
-import kotlinx.datetime.Clock
 import org.hamcrest.CoreMatchers.containsString
 import org.hamcrest.CoreMatchers.not
 import org.hamcrest.Matcher
@@ -68,10 +70,25 @@ fun scrollToPreferenceWithText(textResource: Int) {
       )
 }
 
+fun clickOnPreference(textResource: Int) {
+  onView(withId(androidx.preference.R.id.recycler_view))
+      .perform(
+          RecyclerViewActions.actionOnItem<RecyclerView.ViewHolder>(
+              hasDescendant(withText(textResource)),
+              click(),
+          ),
+      )
+}
+
 fun writeToPreference(textResource: Int, value: String) {
-  scrollToPreferenceWithText(textResource)
-  clickOn(textResource)
-  BaristaEditTextInteractions.writeTo(android.R.id.edit, value)
+  onView(withId(androidx.preference.R.id.recycler_view))
+      .perform(
+          RecyclerViewActions.actionOnItem<RecyclerView.ViewHolder>(
+              hasDescendant(withText(textResource)),
+              click(),
+          ),
+      )
+  writeTo(android.R.id.edit, value)
   clickDialogPositiveButton()
 }
 
@@ -83,6 +100,10 @@ fun setNotFirstStartPreferences() {
       .edit()
       .putBoolean(Preferences::firstStart.name, false)
       .putBoolean(Preferences::setupCompleted.name, true)
+      // Reset "user declined" flags so permission/services dialogs appear consistently on each
+      // test run regardless of what previous tests in the same session may have set.
+      .putBoolean(Preferences::userDeclinedEnableBackgroundLocationPermissions.name, false)
+      .putBoolean(Preferences::userDeclinedEnableLocationServices.name, false)
       .apply()
 }
 
@@ -125,7 +146,8 @@ inline fun IdlingResource?.use(timeout: Duration = 15.seconds, block: () -> Unit
       Timber.i("${this.name}@${this.hashCode()} is now idle after $time")
     }
     Timber.i(
-        "Currently waiting on ${IdlingRegistry.getInstance().resources.map { it.name + "@" + it.hashCode() }}")
+        "Currently waiting on ${IdlingRegistry.getInstance().resources.map { it.name + "@" + it.hashCode() }}"
+    )
     Timber.i("Unregistering idling resource ${this?.name}")
     IdlingRegistry.getInstance().unregister(this)
     block()
@@ -137,19 +159,6 @@ inline fun IdlingResource?.use(timeout: Duration = 15.seconds, block: () -> Unit
       Timber.i("Finally unregistering idling resource ${this.name}@${this.hashCode()}")
       IdlingRegistry.getInstance().unregister(this)
     }
-  }
-}
-
-fun disableDeviceLocation() {
-  val cmd =
-      if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O) {
-        "settings put secure location_mode 0"
-      } else {
-        "settings put secure location_providers_allowed -gps"
-      }
-
-  getInstrumentation().uiAutomation.executeShellCommand(cmd).use {
-    it.dumpOutputToLog("disable devicelocation")
   }
 }
 
@@ -172,19 +181,6 @@ fun disableHeadsupNotifications() {
       .uiAutomation
       .executeShellCommand("settings put global heads_up_notifications_enabled 0")
       .use { it.dumpOutputToLog("disable heads_up_notifications") }
-}
-
-fun enableDeviceLocation() {
-  val cmd =
-      if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O) {
-        "settings put secure location_mode 3"
-      } else {
-        "settings put secure location_providers_allowed +gps"
-      }
-
-  getInstrumentation().uiAutomation.executeShellCommand(cmd).use {
-    it.dumpOutputToLog("enable devicelocation")
-  }
 }
 
 fun grantNotificationAndForegroundPermissions() {
@@ -280,7 +276,7 @@ fun Random.string(length: Int) =
 fun doIfViewNotVisible(@IdRes id: Int, doThat: () -> Unit) {
   try {
     onView(withId(id)).check(matches(ViewMatchers.isDisplayed()))
-  } catch (e: AssertionFailedError) {
+  } catch (_: AssertionFailedError) {
     doThat()
   }
 }
@@ -382,6 +378,63 @@ fun waitUntilViewNotDisplayed(@IdRes viewId: Int, timeout: Duration = TIMEOUT) {
 }
 
 /**
+ * Polls until at least [areaPercentage]% of the view with [viewId] is within the global visible
+ * rectangle, or throws if [timeout] is exceeded. Use this before clicking views that may still be
+ * animating into position (e.g. BottomSheetBehavior with SpringAnimation, which does not respect
+ * animator_duration_scale=0). Barista's clickOn requires 90% visibility by default.
+ */
+fun waitUntilViewFullyVisible(
+    @IdRes viewId: Int,
+    areaPercentage: Int = 90,
+    timeout: Duration = TIMEOUT,
+) {
+  val deadline = Clock.System.now().plus(timeout)
+  var lastError: Throwable? = null
+  while (Clock.System.now() < deadline) {
+    try {
+      onView(withId(viewId)).check(matches(ViewMatchers.isDisplayingAtLeast(areaPercentage)))
+      return
+    } catch (e: Throwable) {
+      lastError = e
+      Thread.sleep(CONDITION_CHECK_INTERVAL)
+    }
+  }
+  throw lastError
+      ?: AssertionError(
+          "Timed out waiting for view $viewId to be at least $areaPercentage% visible"
+      )
+}
+
+/**
+ * Waits until at least [minVisibility]% of the view is within the global visible rectangle, then
+ * performs a click using a custom [ViewAction] constrained to the same visibility level. Use
+ * instead of [waitUntilViewFullyVisible] + [clickOn] for views that are structurally partially
+ * off-screen (e.g. a button in a [androidx.constraintlayout.helper.widget.Flow] chain that wraps to
+ * a second row on a small screen, permanently clipping the view below the 90% threshold that
+ * Barista's [clickOn] and Espresso's [ViewActions.click] require).
+ */
+fun waitAndClickWithMinVisibility(
+    @IdRes viewId: Int,
+    minVisibility: Int = 80,
+    timeout: Duration = TIMEOUT,
+) {
+  waitUntilViewFullyVisible(viewId, minVisibility, timeout)
+  onView(withId(viewId))
+      .perform(
+          object : ViewAction {
+            override fun getConstraints() = ViewMatchers.isDisplayingAtLeast(minVisibility)
+
+            override fun getDescription() = "click with at-least-$minVisibility% visibility"
+
+            override fun perform(uiController: UiController, view: View) {
+              view.performClick()
+              uiController.loopMainThreadUntilIdle()
+            }
+          }
+      )
+}
+
+/**
  * Polls until the view with [viewId] contains [stringId] as a substring, or throws if [timeout] is
  * exceeded. Needed when the UI state may temporarily cycle through intermediate states (e.g.
  * CONNECTING) before settling on the expected error state.
@@ -389,7 +442,7 @@ fun waitUntilViewNotDisplayed(@IdRes viewId: Int, timeout: Duration = TIMEOUT) {
 fun waitUntilViewContains(
     @IdRes viewId: Int,
     @StringRes stringId: Int,
-    timeout: Duration = TIMEOUT
+    timeout: Duration = TIMEOUT,
 ) {
   val text = getInstrumentation().targetContext.getString(stringId)
   val deadline = Clock.System.now().plus(timeout)

@@ -21,6 +21,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.conscrypt.Conscrypt
 import org.owntracks.android.BuildConfig
 import org.owntracks.android.data.EndpointState
+import org.owntracks.android.data.EndpointStatus
 import org.owntracks.android.data.repos.EndpointStateRepo
 import org.owntracks.android.di.ApplicationScope
 import org.owntracks.android.di.CoroutineScopes
@@ -44,11 +45,11 @@ class HttpMessageProcessorEndpoint(
     private val applicationContext: Context,
     private val endpointStateRepo: EndpointStateRepo,
     private val caKeyStore: KeyStore,
-    @ApplicationScope private val scope: CoroutineScope,
-    @CoroutineScopes.IoDispatcher private val ioDispatcher: CoroutineDispatcher
+    @param:ApplicationScope private val scope: CoroutineScope,
+    @param:CoroutineScopes.IoDispatcher private val ioDispatcher: CoroutineDispatcher,
 ) : MessageProcessorEndpoint(messageProcessor), Preferences.OnPreferenceChangeListener {
   override val modeId: ConnectionMode = ConnectionMode.HTTP
-  private var httpClientAndConfiguration: HttpClientAndConfiguration? = null
+  internal var httpClientAndConfiguration: HttpClientAndConfiguration? = null
 
   override fun activate() {
     Timber.v("HTTP Activate")
@@ -57,13 +58,13 @@ class HttpMessageProcessorEndpoint(
       httpClientAndConfiguration = setClientAndConfiguration(applicationContext, preferences)
     } catch (e: ConfigurationIncompleteException) {
       Timber.e(e)
-      scope.launch { endpointStateRepo.setState(EndpointState.ERROR_CONFIGURATION.withError(e)) }
+      scope.launch { setEndpointState(EndpointState.ERROR_CONFIGURATION.withError(e)) }
     }
   }
 
   private fun createHttpClient(
       socketFactory: SocketFactory,
-      hostnameVerifier: HostnameVerifier?
+      hostnameVerifier: HostnameVerifier?,
   ): OkHttpClient =
       OkHttpClient.Builder()
           .followRedirects(true)
@@ -117,14 +118,14 @@ class HttpMessageProcessorEndpoint(
     message.setTopicVisible()
 
     httpClientAndConfiguration!!.run {
-      endpointStateRepo.setState(EndpointState.CONNECTING)
+      setEndpointState(EndpointState.CONNECTING)
       return try {
         client.newCall(getRequest(configuration, message)).execute().use { response ->
           Timber.d("HTTP response received: $response")
           if (!response.isSuccessful) {
             val httpException = Exception("HTTP request failed. Status: ${response.code}")
             Timber.e("HTTP request failed. Status: ${response.code}")
-            endpointStateRepo.setState(
+            setEndpointState(
                 EndpointState.ERROR.withMessage(
                     String.format(Locale.ROOT, "HTTP code %d", response.code),
                 ),
@@ -132,40 +133,43 @@ class HttpMessageProcessorEndpoint(
             messageProcessor.onMessageDeliveryFailed(message)
             Result.failure(OutgoingMessageSendingException(httpException))
           } else {
-            if (response.body != null) {
-              try {
-                val responseString = response.body!!.string()
-                Timber.d("HTTP response body: ${responseString.take(1000)}")
-                val responseStream = ByteArrayInputStream(responseString.toByteArray())
-                val result = parser.fromJson(responseStream)
-                // TODO apply i18n here
-                scope.launch {
-                  endpointStateRepo.setState(
-                      EndpointState.IDLE.withMessage(
-                          String.format(
-                              Locale.ROOT,
-                              "Response %d, (%d msgs received)",
-                              response.code,
-                              result.size,
-                          ),
-                      ),
-                  )
-                  result.forEach { onMessageReceived(it) }
-                }
-                return Result.success(Unit)
-              } catch (e: IOException) {
-                Timber.e(e, "HTTP Delivery failed")
-                endpointStateRepo.setState(EndpointState.ERROR.withError(e))
-                messageProcessor.onMessageDeliveryFailed(message)
-                return Result.failure(OutgoingMessageSendingException(e))
+            try {
+              val responseString = response.body.string()
+              Timber.d("HTTP response body: ${responseString.take(1000)}")
+              val responseStream = ByteArrayInputStream(responseString.toByteArray())
+              val result = parser.fromJson(responseStream)
+              // TODO apply i18n here
+              scope.launch {
+                setEndpointState(
+                    EndpointState.IDLE.withMessage(
+                        String.format(
+                            Locale.ROOT,
+                            "Response %d, (%d msgs received)",
+                            response.code,
+                            result.size,
+                        ),
+                    ),
+                )
+                result.forEach { onMessageReceived(it) }
               }
-            } else {
-              Result.failure(OutgoingMessageSendingException(null))
+              return Result.success(Unit)
+            } catch (e: IOException) {
+              Timber.w(e, "HTTP response body could not be parsed, ignoring")
+              setEndpointState(
+                  EndpointState.IDLE.withMessage(
+                      String.format(
+                          Locale.ROOT,
+                          "Response %d (response not parseable)",
+                          response.code,
+                      ),
+                  ),
+              )
+              return Result.success(Unit)
             }
           }
         }
       } catch (e: Exception) {
-        endpointStateRepo.setState(EndpointState.ERROR.withError(e))
+        setEndpointState(EndpointState.ERROR.withError(e))
         Timber.d(e, "Execute call failed")
         // Sometimes we get an exception just on the execute() call
         Result.failure(OutgoingMessageSendingException(e))
@@ -173,7 +177,26 @@ class HttpMessageProcessorEndpoint(
     }
   }
 
+  /*
+  Set when this endpoint is replaced. It may still be winding down (an MQTT disconnect finishes
+  asynchronously) or get late callbacks, and none of that should overwrite the state of the endpoint
+  that replaced it.
+   */
+  @Volatile private var deactivated = false
+
+  private suspend fun setEndpointState(status: EndpointStatus) {
+    if (deactivated) {
+      Timber.v("Ignoring endpoint state $status from a deactivated endpoint")
+      return
+    }
+    endpointStateRepo.setState(status)
+  }
+
+  private suspend fun setEndpointState(state: EndpointState) =
+      setEndpointState(EndpointStatus(state))
+
   override fun deactivate() {
+    deactivated = true
     preferences.unregisterOnPreferenceChangedListener(this)
   }
 
@@ -206,7 +229,7 @@ class HttpMessageProcessorEndpoint(
 
   private fun setClientAndConfiguration(
       context: Context,
-      preferences: Preferences
+      preferences: Preferences,
   ): HttpClientAndConfiguration {
     Timber.v("Creating new HTTP client and configuration")
     val httpConfiguration = getEndpointConfiguration()
@@ -257,7 +280,7 @@ class HttpMessageProcessorEndpoint(
 
   data class HttpClientAndConfiguration(
       val client: OkHttpClient,
-      val configuration: HttpConfiguration
+      val configuration: HttpConfiguration,
   )
 
   companion object {

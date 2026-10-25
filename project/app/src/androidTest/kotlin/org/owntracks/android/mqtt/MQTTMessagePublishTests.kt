@@ -13,10 +13,10 @@ import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import com.adevinta.android.barista.interaction.BaristaDrawerInteractions.openDrawer
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import dagger.hilt.android.testing.HiltAndroidTest
+import io.github.davidepianca98.mqtt.packets.mqtt.MQTTPublish
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Named
-import mqtt.packets.mqtt.MQTTPublish
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,6 +39,7 @@ import org.owntracks.android.testutils.grantMapActivityPermissions
 import org.owntracks.android.testutils.idlingresources.BottomSheetResource
 import org.owntracks.android.testutils.setNotFirstStartPreferences
 import org.owntracks.android.testutils.use
+import org.owntracks.android.testutils.waitAndClickWithMinVisibility
 import org.owntracks.android.ui.map.MapActivity
 
 @ExperimentalUnsignedTypes
@@ -54,12 +55,12 @@ class MQTTMessagePublishTests :
 
   @Test
   fun given_an_MQTT_configured_client_when_the_report_button_is_pressed_then_the_broker_receives_a_packet_with_the_correct_location_message_in() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     val mockLatitude = 51.0
-    val mockLongitude = 0.0
+    val mockLongitude = 1.0
 
     reportLocationFromMap(mockLocationIdlingResource) {
       mockLocationProviderClient.setLocation(mockLatitude, mockLongitude)
@@ -96,9 +97,9 @@ class MQTTMessagePublishTests :
 
   @Test
   fun given_an_MQTT_configured_client_when_the_user_publishes_waypoints_then_the_broker_receives_a_waypoint_message() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     openDrawer()
     clickOn(R.string.title_activity_waypoints)
@@ -126,9 +127,9 @@ class MQTTMessagePublishTests :
 
   @Test
   fun given_an_MQTT_configured_client_when_the_broker_sends_a_location_for_a_cleared_contact_then_a_the_contact_returns_with_the_correct_details() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     openDrawer()
     clickOn(R.string.title_activity_contacts)
@@ -145,6 +146,7 @@ class MQTTMessagePublishTests :
               batteryStatus = BatteryStatus.CHARGING
               velocity = 99
               timestamp = Instant.parse("2006-01-02T15:04:05Z").epochSecond
+              trackerId = "testUser"
             },
             MessageCard().apply {
               name = contactName
@@ -164,7 +166,7 @@ class MQTTMessagePublishTests :
         )
         .use {
           assertDisplayed(R.id.contactClearButton)
-          clickOn(R.id.contactClearButton)
+          waitAndClickWithMinVisibility(R.id.contactClearButton)
         }
 
     openDrawer()
@@ -177,6 +179,7 @@ class MQTTMessagePublishTests :
               latitude = 50.123
               longitude = 3.56789
               timestamp = Instant.parse("2006-01-02T15:04:05Z").epochSecond
+              trackerId = "testUser"
             },
         )
         .sendFromBroker(broker)

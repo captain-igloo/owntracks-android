@@ -25,7 +25,7 @@ import timber.log.Timber
 @Singleton
 class DeviceMetricsProvider
 @Inject
-internal constructor(@ApplicationContext private val context: Context) {
+internal constructor(@param:ApplicationContext private val context: Context) {
   val batteryLevel: Int?
     get() {
       return context
@@ -111,7 +111,9 @@ internal constructor(@ApplicationContext private val context: Context) {
       val resultBack =
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContextCompat.checkSelfPermission(
-                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                context,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+            )
           } else {
             PackageManager.PERMISSION_GRANTED
           }

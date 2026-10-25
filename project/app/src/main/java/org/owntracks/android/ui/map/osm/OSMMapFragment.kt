@@ -13,9 +13,12 @@ import android.view.Surface
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.Insets
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.graphics.drawable.toDrawable
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.preference.PreferenceManager
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
@@ -68,12 +71,16 @@ internal constructor(
 
         override fun startLocationProvider(myLocationConsumer: IMyLocationConsumer?): Boolean {
           val locationProvider: IMyLocationProvider = this
+          // Only collect while started: the subscription keeps the high-accuracy blue-dot
+          // location request alive, which shouldn't outlive the map being visible.
           locationJob =
               viewLifecycleOwner.lifecycleScope.launch {
-                viewModel.currentLocation.collect { location ->
-                  if (location != null) {
-                    onLocationObserved(location) {
-                      myLocationConsumer?.onLocationChanged(location, locationProvider)
+                viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                  viewModel.currentLocation.collect { location ->
+                    if (location != null) {
+                      onLocationObserved(location) {
+                        myLocationConsumer?.onLocationChanged(location, locationProvider)
+                      }
                     }
                   }
                 }
@@ -96,6 +103,7 @@ internal constructor(
       }
 
   private var mapView: MapView? = null
+  private var mapViewportPadding: Insets = Insets.NONE
 
   override fun onCreateView(
       inflater: LayoutInflater,
@@ -117,8 +125,10 @@ internal constructor(
   }
 
   private fun setMapStyle() {
-    if (resources.configuration.uiMode.and(android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-        android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+    if (
+        resources.configuration.uiMode.and(android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+    ) {
       mapView?.run { overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS) }
     } else {
       mapView?.run { overlayManager.tilesOverlay.setColorFilter(null) }
@@ -216,14 +226,16 @@ internal constructor(
         this.binding.osmMapView.apply {
           minZoomLevel = MIN_ZOOM_LEVEL
           maxZoomLevel = MAX_ZOOM_LEVEL
-          viewModel.mapLayerStyle.value?.run { setMapLayerType(this) }
+          viewModel.mapLayerStyle.value.run { setMapLayerType(this) }
           zoomController.setVisibility(CustomZoomButtonsController.Visibility.SHOW_AND_FADEOUT)
           addMapListener(mapListener)
           zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
           // Make sure we don't add to the mylocation overlay
-          if (!overlays.any {
-            it is MyLocationNewOverlay && it.mMyLocationProvider == osmMapLocationSource
-          }) {
+          if (
+              !overlays.any {
+                it is MyLocationNewOverlay && it.mMyLocationProvider == osmMapLocationSource
+              }
+          ) {
             overlays.add(
                 MyLocationNewOverlay(osmMapLocationSource, this).apply {
                   setOnClickListener { onMapClick() }
@@ -249,17 +261,17 @@ internal constructor(
             )
           }
 
-          if (!overlays.any { it is RotationGestureOverlayWithDeadZone } &&
-              preferences.enableMapRotation) {
+          if (
+              !overlays.any { it is RotationGestureOverlayWithDeadZone } &&
+                  preferences.enableMapRotation
+          ) {
             overlays.add(RotationGestureOverlayWithDeadZone(this))
           }
           if (!overlays.any { it is CopyrightOverlay }) {
-            overlays.add(CopyrightOverlay(context))
+            overlays.add(CopyrightOverlay(context).apply { setAlignBottom(true) })
           }
           if (!overlays.any { it is CompassOverlay } && preferences.enableMapRotation) {
             addMapListener(compassOrientationMapListener)
-
-            val compassMargin = 35f
 
             overlays.add(
                 ClickableCompassOverlay(
@@ -270,7 +282,6 @@ internal constructor(
                     .apply {
                       isPointerMode = false
                       enableCompass()
-                      setCompassCenter(compassMargin, compassMargin)
                     },
             )
           }
@@ -283,9 +294,39 @@ internal constructor(
           viewModel.initMapStartingLocation().run {
             controller.animateTo(latLng.toGeoPoint(), zoom, 0, rotation)
           }
+          applyMapViewportPadding()
         }
     setMapStyle()
     drawAllContactsAndRegions()
+  }
+
+  override fun setMapViewportPadding(insets: Insets) {
+    mapViewportPadding = insets
+    applyMapViewportPadding()
+  }
+
+  private fun applyMapViewportPadding() {
+    val padding = mapViewportPadding
+    mapView?.run {
+      setPadding(padding.left, padding.top, padding.right, padding.bottom)
+      overlays.filterIsInstance<CompassOverlay>().forEach {
+        // CompassOverlay.setCompassCenter takes dp, not pixels - it multiplies by density
+        // internally. padding.left/top are real pixel insets, so convert them down to dp here.
+        val density = resources.displayMetrics.density
+        val compassMarginDp = 35f
+        it.setCompassCenter(
+            padding.left / density + compassMarginDp,
+            padding.top / density + compassMarginDp,
+        )
+      }
+      overlays.filterIsInstance<CopyrightOverlay>().forEach {
+        val copyrightMargin = (resources.displayMetrics.density * 8).roundToInt()
+        it.setAlignBottom(true)
+        it.setAlignRight(false)
+        it.setOffset(padding.left + copyrightMargin, padding.bottom + copyrightMargin)
+      }
+      invalidate()
+    }
   }
 
   override fun updateCamera(latLng: LatLng) {
@@ -459,7 +500,8 @@ internal constructor(
               )
               .filter {
                 (TileSystemWebMercator.MinLatitude..TileSystemWebMercator.MaxLatitude).contains(
-                    it.latitude) &&
+                    it.latitude
+                ) &&
                     (TileSystemWebMercator.MinLongitude..TileSystemWebMercator.MaxLongitude)
                         .contains(it.longitude)
               }

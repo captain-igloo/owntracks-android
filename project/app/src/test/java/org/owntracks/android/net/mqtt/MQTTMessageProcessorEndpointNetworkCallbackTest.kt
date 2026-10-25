@@ -18,6 +18,7 @@ import org.junit.Test
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.owntracks.android.data.EndpointState
+import org.owntracks.android.data.EndpointStatus
 import org.owntracks.android.data.repos.EndpointStateRepo
 import org.owntracks.android.model.Parser
 import org.owntracks.android.services.worker.Scheduler
@@ -46,15 +47,16 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
       CoroutineScope(
           SupervisorJob() +
               testDispatcher +
-              CoroutineExceptionHandler { _, _ -> /* swallow expected reconnect failures */ })
+              CoroutineExceptionHandler { _, _ -> /* swallow expected reconnect failures */ }
+      )
 
   private val endpointStateRepo = EndpointStateRepo()
 
   private val mockConnectivityManager: ConnectivityManager = mock {}
   private val mockAlarmManager: AlarmManager = mock {}
   private val mockContext: Context = mock {
-    on { getSystemService(Context.CONNECTIVITY_SERVICE) } doReturn mockConnectivityManager
-    on { getSystemService(Context.ALARM_SERVICE) } doReturn mockAlarmManager
+    on { getSystemService(ConnectivityManager::class.java) } doReturn mockConnectivityManager
+    on { getSystemService(AlarmManager::class.java) } doReturn mockAlarmManager
   }
 
   private lateinit var endpoint: MQTTMessageProcessorEndpoint
@@ -72,7 +74,8 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
             scope = testScope,
             ioDispatcher = testDispatcher,
             applicationContext = mockContext,
-            mqttConnectionIdlingResource = SimpleIdlingResource("test", true))
+            mqttConnectionIdlingResource = SimpleIdlingResource("test", true),
+        )
   }
 
   // ── justRegistered bootstrap ───────────────────────────────────────────────
@@ -94,14 +97,14 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
     // Reconnect is handled by activate() for the initial callback; onAvailable must not
     // double-trigger it on first registration.
     val network: Network = mock {}
-    endpointStateRepo.endpointState.value = EndpointState.DISCONNECTED
+    endpointStateRepo.endpointState.value = EndpointStatus(EndpointState.DISCONNECTED)
     val cb = endpoint.networkChangeCallback
     cb.reset()
 
     cb.onAvailable(network)
 
     // State must not have changed (no reconnect was launched)
-    assertEquals(EndpointState.DISCONNECTED, endpointStateRepo.endpointState.value)
+    assertEquals(EndpointState.DISCONNECTED, endpointStateRepo.endpointState.value.state)
   }
 
   // ── network switch (WiFi → mobile): the primary bug scenario ──────────────
@@ -115,7 +118,7 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
     val cb = endpoint.networkChangeCallback
     cb.reset()
     cb.onAvailable(wifiNetwork) // bootstrap: records wifi, clears justRegistered
-    endpointStateRepo.endpointState.value = EndpointState.CONNECTED
+    endpointStateRepo.endpointState.value = EndpointStatus(EndpointState.CONNECTED)
 
     cb.onAvailable(mobileNetwork)
 
@@ -129,7 +132,7 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
     val cb = endpoint.networkChangeCallback
     cb.reset()
     cb.onAvailable(network) // bootstrap: records network, clears justRegistered
-    endpointStateRepo.endpointState.value = EndpointState.CONNECTED
+    endpointStateRepo.endpointState.value = EndpointStatus(EndpointState.CONNECTED)
 
     cb.onAvailable(network)
 
@@ -145,7 +148,7 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
     val cb = endpoint.networkChangeCallback
     cb.reset()
     cb.onAvailable(oldNetwork) // bootstrap: records oldNetwork, clears justRegistered
-    endpointStateRepo.endpointState.value = EndpointState.DISCONNECTED
+    endpointStateRepo.endpointState.value = EndpointStatus(EndpointState.DISCONNECTED)
 
     cb.onAvailable(newNetwork)
 
@@ -158,12 +161,71 @@ class MQTTMessageProcessorEndpointNetworkCallbackTest {
     val cb = endpoint.networkChangeCallback
     cb.reset()
     cb.onAvailable(network) // bootstrap: records network, clears justRegistered
-    endpointStateRepo.endpointState.value = EndpointState.DISCONNECTED
+    endpointStateRepo.endpointState.value = EndpointStatus(EndpointState.DISCONNECTED)
 
     cb.onAvailable(network)
 
     // currentNetwork is already correct; it must not be cleared or replaced.
     assertEquals(network, cb.currentNetwork)
+  }
+
+  // ── recovery from a failed connect attempt (issue #2294) ──────────────────
+
+  /**
+   * Drives a [NetworkTrackingCallback] directly, so that the reconnect can be observed rather than
+   * inferred from endpoint state. Bootstraps [network] as the current network first, so the
+   * subsequent onAvailable exercises the same-network branch.
+   *
+   * @return the number of reconnects triggered by the second onAvailable
+   */
+  private fun reconnectsOnRepeatOnAvailable(state: EndpointState): Int {
+    val network: Network = mock {}
+    var reconnects = 0
+    val cb =
+        NetworkTrackingCallback(
+            endpointState = { state },
+            reconnectFunction = { reconnects++ },
+            disconnectFunction = {},
+        )
+    cb.onAvailable(network) // bootstrap: records network, clears justRegistered
+    reconnects = 0
+
+    cb.onAvailable(network)
+    return reconnects
+  }
+
+  @Test
+  fun `onAvailable for the same network while in ERROR triggers a reconnect`() {
+    // A connect that fails (e.g. DNS not yet usable on a freshly-associated wifi) leaves the
+    // endpoint in ERROR, not DISCONNECTED. The framework hands out no new Network once the link
+    // settles, so this repeat onAvailable is the only signal we get and must not be ignored.
+    assertEquals(1, reconnectsOnRepeatOnAvailable(EndpointState.ERROR))
+  }
+
+  @Test
+  fun `onAvailable for the same network in any non-connected state triggers a reconnect`() {
+    listOf(
+            EndpointState.INITIAL,
+            EndpointState.IDLE,
+            EndpointState.DISCONNECTED,
+            EndpointState.ERROR,
+            EndpointState.ERROR_CONFIGURATION,
+        )
+        .forEach {
+          assertEquals("state $it should reconnect", 1, reconnectsOnRepeatOnAvailable(it))
+        }
+  }
+
+  @Test
+  fun `onAvailable for the same network while CONNECTED does not trigger a reconnect`() {
+    assertEquals(0, reconnectsOnRepeatOnAvailable(EndpointState.CONNECTED))
+  }
+
+  @Test
+  fun `onAvailable for the same network while CONNECTING does not trigger a reconnect`() {
+    // A connect attempt is genuinely in flight and will settle on CONNECTED or ERROR by itself;
+    // reconnecting would tear down an attempt that may be about to succeed.
+    assertEquals(0, reconnectsOnRepeatOnAvailable(EndpointState.CONNECTING))
   }
 
   // ── onLost guarding ───────────────────────────────────────────────────────

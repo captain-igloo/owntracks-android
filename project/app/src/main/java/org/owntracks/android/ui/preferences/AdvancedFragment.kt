@@ -1,6 +1,7 @@
 package org.owntracks.android.ui.preferences
 
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.widget.TextView
 import androidx.preference.ListPreference
@@ -58,6 +59,9 @@ class AdvancedFragment @Inject constructor() :
 
     findPreference<Preference>("autostartWarning")?.isVisible =
         !requirementsChecker.hasBackgroundLocationPermission()
+
+    findPreference<SwitchPreferenceCompat>(Preferences::useGNSSInSignificantMonitoringMode.name)
+        ?.isVisible = Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
 
     findPreference<ListPreference>(Preferences::reverseGeocodeProvider.name)
         ?.onPreferenceChangeListener =

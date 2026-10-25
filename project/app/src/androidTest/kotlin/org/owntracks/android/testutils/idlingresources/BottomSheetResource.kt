@@ -41,7 +41,7 @@ abstract class BottomSheetResource(private val bottomSheetBehavior: BottomSheetB
 
   class BottomSheetStateResource(
       bottomSheetBehavior: BottomSheetBehavior<View>,
-      @BottomSheetBehavior.State private val desiredState: Int
+      @param:BottomSheetBehavior.State private val desiredState: Int,
   ) : BottomSheetResource(bottomSheetBehavior) {
 
     override fun getName(): String {

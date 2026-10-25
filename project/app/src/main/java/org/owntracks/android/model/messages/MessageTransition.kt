@@ -2,7 +2,8 @@
 
 package org.owntracks.android.model.messages
 
-import kotlinx.datetime.Instant
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -10,6 +11,7 @@ import kotlinx.serialization.Transient
 import org.owntracks.android.location.geofencing.Geofence
 import org.owntracks.android.preferences.Preferences
 
+@OptIn(ExperimentalTime::class)
 @Serializable
 @SerialName(MessageTransition.TYPE)
 class MessageTransition(
@@ -50,9 +52,14 @@ class MessageTransition(
 
   @SerialName("acc") var accuracy = 0
 
-  @SerialName("lon") var longitude = 0.0
+  // Always written out, even at their 0.0 defaults: the equator and prime meridian are real places.
+  @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
+  @SerialName("lon")
+  var longitude = 0.0
 
-  @SerialName("lat") var latitude = 0.0
+  @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
+  @SerialName("lat")
+  var latitude = 0.0
 
   override fun annotateFromPreferences(preferences: Preferences) {
     topic = preferences.pubTopicEvents

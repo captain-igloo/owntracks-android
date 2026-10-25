@@ -16,6 +16,7 @@ import org.owntracks.android.net.mqtt.MqttConnectionConfiguration
 import org.owntracks.android.support.interfaces.ConfigurationIncompleteException
 import timber.log.Timber
 
+/** The kind of state the endpoint is in. Carries no data: see [EndpointStatus] for that. */
 enum class EndpointState {
   INITIAL,
   IDLE,
@@ -24,15 +25,6 @@ enum class EndpointState {
   DISCONNECTED,
   ERROR,
   ERROR_CONFIGURATION;
-
-  var message: String? = null
-  var error: Throwable? = null
-    private set
-
-  fun withMessage(message: String): EndpointState {
-    this.message = message
-    return this
-  }
 
   fun getLabel(context: Context): String =
       when (this) {
@@ -44,6 +36,26 @@ enum class EndpointState {
         ERROR -> context.resources.getString(R.string.ERROR)
         ERROR_CONFIGURATION -> context.resources.getString(R.string.ERROR_CONFIGURATION)
       }
+
+  fun withMessage(message: String): EndpointStatus = EndpointStatus(this, message = message)
+
+  fun withError(error: Throwable): EndpointStatus = EndpointStatus(this, error = error)
+}
+
+/**
+ * The endpoint's state, with whatever message or error accompanies it.
+ *
+ * Immutable, so a message or error belongs to exactly one state change. (They used to be mutable
+ * fields on the [EndpointState] constants themselves, so one set on, say, ERROR stuck to every
+ * later ERROR and was shown in place of whatever came after - and setting ERROR again with a new
+ * error emitted the same object, which a StateFlow drops as unchanged.)
+ */
+data class EndpointStatus(
+    val state: EndpointState,
+    val message: String? = null,
+    val error: Throwable? = null,
+) {
+  fun getLabel(context: Context): String = state.getLabel(context)
 
   fun getErrorLabel(context: Context): String =
       when (val e = error) {
@@ -61,6 +73,8 @@ enum class EndpointState {
         }
         is SocketTimeoutException ->
             context.getString(R.string.statusEndpointStateMessageSocketTimeout)
+        // DNS fail
+        is UnknownHostException -> context.getString(R.string.statusEndpointStateMessageUnknownHost)
         // Client cert errors show up like this
         is SSLProtocolException ->
             if (e.message != null && e.message!!.contains("TLSV1_ALERT_CERTIFICATE_REQUIRED")) {
@@ -86,8 +100,10 @@ enum class EndpointState {
               is SSLHandshakeException -> {
                 if (mqttExceptionCause.cause?.cause is CertPathValidatorException) {
                   context.getString(R.string.statusEndpointStateMessageTLSEndpointCANotTrustedError)
-                } else if (mqttExceptionCause.message != null &&
-                    mqttExceptionCause.message!!.contains("connection closed")) {
+                } else if (
+                    mqttExceptionCause.message != null &&
+                        mqttExceptionCause.message!!.contains("connection closed")
+                ) {
                   context.getString(R.string.statusEndpointStateMessageTLSConnectionClosed)
                 } else {
                   context.getString(R.string.statusEndpointStateMessageTLSError, e.message)
@@ -95,10 +111,13 @@ enum class EndpointState {
               }
               // Client cert errors show up like this
               is SSLProtocolException ->
-                  if (mqttExceptionCause.message != null &&
-                      mqttExceptionCause.message!!.contains("TLSV1_ALERT_CERTIFICATE_REQUIRED")) {
+                  if (
+                      mqttExceptionCause.message != null &&
+                          mqttExceptionCause.message!!.contains("TLSV1_ALERT_CERTIFICATE_REQUIRED")
+                  ) {
                     context.getString(
-                        R.string.statusEndpointStateMessageTLSEndpointClientCertsRequired)
+                        R.string.statusEndpointStateMessageTLSEndpointClientCertsRequired
+                    )
                   } else {
                     context.getString(R.string.statusEndpointStateMessageTLSError, e.message)
                   }
@@ -110,7 +129,8 @@ enum class EndpointState {
               is IOException ->
                   if (mqttExceptionCause.message?.startsWith("WebSocket Response header") == true) {
                     context.getString(
-                        R.string.statusEndpointStateMessageEndpointDoesNotSupportWebsockets)
+                        R.string.statusEndpointStateMessageEndpointDoesNotSupportWebsockets
+                    )
                   } else {
                     mqttExceptionCause.message ?: mqttExceptionCause.toString()
                   }
@@ -138,23 +158,18 @@ enum class EndpointState {
                     MqttException.REASON_CODE_CONNECTION_LOST ->
                         context.getString(
                             R.string.statusEndpointStateMessageConnectionLost,
-                            mqttExceptionCause.toString())
+                            mqttExceptionCause.toString(),
+                        )
                     else -> mqttExceptionCause.toString()
                   }
             }
         else -> e.toString()
       }.also { Timber.v(error, "Rendering error as $it") }
 
-  fun withError(error: Throwable): EndpointState {
-    this.error = error
-    return this
-  }
-
-  override fun toString(): String {
-    return if (message != null) {
-      "${super.toString()} ($message)"
-    } else {
-      super.toString()
-    }
-  }
+  override fun toString(): String =
+      if (message != null) {
+        "$state ($message)"
+      } else {
+        state.toString()
+      }
 }

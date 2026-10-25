@@ -6,12 +6,12 @@ import com.adevinta.android.barista.assertion.BaristaRecyclerViewAssertions.asse
 import com.adevinta.android.barista.assertion.BaristaVisibilityAssertions.assertDisplayed
 import com.adevinta.android.barista.assertion.BaristaVisibilityAssertions.assertNotDisplayed
 import dagger.hilt.android.testing.HiltAndroidTest
+import io.github.davidepianca98.mqtt.packets.Qos
+import io.github.davidepianca98.mqtt.packets.mqttv5.MQTT5Properties
 import java.time.Instant
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.random.Random
-import mqtt.packets.Qos
-import mqtt.packets.mqttv5.MQTT5Properties
 import org.junit.Test
 import org.owntracks.android.R
 import org.owntracks.android.model.Parser
@@ -36,17 +36,17 @@ class ContactsActivityTests :
 
   @Test
   fun initial_regions_activity_is_empty() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     assertDisplayed(R.string.contactsListPlaceholder)
   }
 
   @Test
   fun contact_appears_when_broker_adds_a_card_message() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     val contactName = "TestName"
     (baristaRule.activityTestRule.activity as ContactsActivity)
         .contactsCountingIdlingResource
@@ -68,9 +68,9 @@ class ContactsActivityTests :
 
   @Test
   fun contact_appears_when_broker_adds_a_card_message_with_an_invalid_face_base64() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     val contactName = "TestName"
     (baristaRule.activityTestRule.activity as ContactsActivity)
         .contactsCountingIdlingResource
@@ -93,9 +93,9 @@ class ContactsActivityTests :
   @OptIn(ExperimentalEncodingApi::class)
   @Test
   fun contact_appears_when_broker_adds_a_card_message_with_an_invalid_face_image() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     val contactName = "TestName"
     (baristaRule.activityTestRule.activity as ContactsActivity)
         .contactsCountingIdlingResource
@@ -117,15 +117,13 @@ class ContactsActivityTests :
 
   @Test
   fun contact_appears_when_broker_adds_a_card_message_and_a_location_message() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
-    (baristaRule.activityTestRule.activity as ContactsActivity)
-        .contactsCountingIdlingResource
-        .increment()
     val contactName = "TestName"
-    listOf(
+    val messages =
+        listOf(
             MessageCard().apply {
               name = contactName
               face = OWNTRACKS_ICON_BASE64
@@ -134,9 +132,15 @@ class ContactsActivityTests :
               latitude = 52.123
               longitude = 0.56789
               timestamp = Instant.parse("2006-01-02T15:04:05Z").epochSecond
+              trackerId = "testUser"
             },
         )
-        .sendFromBroker(broker)
+    repeat(messages.size) {
+      (baristaRule.activityTestRule.activity as ContactsActivity)
+          .contactsCountingIdlingResource
+          .increment()
+    }
+    messages.sendFromBroker(broker)
 
     (baristaRule.activityTestRule.activity as ContactsActivity).contactsCountingIdlingResource.use {
       assertNotDisplayed(R.id.placeholder)
@@ -148,9 +152,9 @@ class ContactsActivityTests :
 
   @Test
   fun contact_appears_when_broker_adds_a_location_message() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     (baristaRule.activityTestRule.activity as ContactsActivity)
         .contactsCountingIdlingResource
         .increment()
@@ -159,7 +163,8 @@ class ContactsActivityTests :
     MessageLocation()
         .apply {
           latitude = 34.0
-          longitude = 0.0
+          longitude = 1.0
+          timestamp = 1695137000
           trackerId = contactName
         }
         .sendFromBroker(broker)
@@ -173,9 +178,9 @@ class ContactsActivityTests :
 
   @Test
   fun multiple_contacts_displayed_in_time_stamp_order() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     val baseTimeStamp = Instant.ofEpochSecond(1695137000)
 
@@ -233,16 +238,16 @@ class ContactsActivityTests :
 
   @Test
   fun contact_removed_when_clear_message_is_sent() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     (baristaRule.activityTestRule.activity as ContactsActivity)
         .contactsCountingIdlingResource
         .increment()
     MessageLocation()
         .apply {
           latitude = 51.0
-          longitude = 0.0
+          longitude = 1.0
           timestamp = 1695137000
           trackerId = "aa"
         }

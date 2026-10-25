@@ -10,10 +10,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.app.ShareCompat
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
 import androidx.databinding.DataBindingUtil
 import androidx.lifecycle.Lifecycle
@@ -50,16 +52,23 @@ class LogViewerActivity : AppCompatActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     binding =
-        DataBindingUtil.setContentView<UiPreferencesLogsBinding?>(
-                this, R.layout.ui_preferences_logs)
+        DataBindingUtil.setContentView<UiPreferencesLogsBinding>(
+                this,
+                R.layout.ui_preferences_logs,
+            )
             .apply {
               lifecycleOwner = this@LogViewerActivity
               setSupportActionBar(appbar.toolbar)
 
               // Handle window insets for edge-to-edge
-              ViewCompat.setOnApplyWindowInsetsListener(frame) { view, windowInsets ->
+              val fabBaseMarginBottom =
+                  (shareFab.layoutParams as CoordinatorLayout.LayoutParams).bottomMargin
+              ViewCompat.setOnApplyWindowInsetsListener(frame) { _, windowInsets ->
                 val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
                 appbar.root.updatePadding(top = insets.top)
+                shareFab.updateLayoutParams<CoordinatorLayout.LayoutParams> {
+                  bottomMargin = fabBaseMarginBottom + insets.bottom
+                }
                 WindowInsetsCompat.CONSUMED
               }
             }
@@ -77,7 +86,9 @@ class LogViewerActivity : AppCompatActivity() {
                 resources.getColor(R.color.log_debug_tag_color),
                 resources.getColor(R.color.log_info_tag_color),
                 resources.getColor(R.color.log_warning_tag_color),
-                resources.getColor(R.color.log_error_tag_color)))
+                resources.getColor(R.color.log_error_tag_color),
+            )
+        )
     restartLogCollector()
 
     binding.logsRecyclerView.apply {
@@ -107,14 +118,13 @@ class LogViewerActivity : AppCompatActivity() {
   private fun restartLogCollector() {
     collectorJob?.cancel("Restarting")
     logAdapter.clearLogs()
-    collectorJob =
-        lifecycleScope.launch {
-          viewModel.logLines().flowWithLifecycle(lifecycle, Lifecycle.State.STARTED).collect {
-            if (viewModel.isDebugEnabled() || it.priority >= Log.INFO) {
-              updateAdapterWithLogLines(it)
-            }
-          }
+    collectorJob = lifecycleScope.launch {
+      viewModel.logLines().flowWithLifecycle(lifecycle, Lifecycle.State.STARTED).collect {
+        if (viewModel.isDebugEnabled() || it.priority >= Log.INFO) {
+          updateAdapterWithLogLines(it)
         }
+      }
+    }
   }
 
   private fun updateAdapterWithLogLines(logEntry: LogEntry) {

@@ -2,7 +2,8 @@ package org.owntracks.android.model
 
 import java.io.ByteArrayInputStream
 import java.io.IOException
-import kotlinx.datetime.Instant
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -39,6 +40,7 @@ import org.owntracks.android.preferences.Preferences
 import org.owntracks.android.preferences.types.MonitoringMode
 import org.owntracks.android.preferences.types.MqttQos
 
+@OptIn(ExperimentalTime::class)
 class ParserTest {
   private val testId = "dummyTestId"
   private val extendedMessageLocation =
@@ -483,23 +485,30 @@ class ParserTest {
     assertTrue(jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.isNotEmpty() == true)
     assertEquals(
         "waypoint",
-        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("_type")?.jsonPrimitive?.content)
+        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("_type")?.jsonPrimitive?.content,
+    )
     assertEquals(
         "Test waypoint",
-        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("desc")?.jsonPrimitive?.content)
+        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("desc")?.jsonPrimitive?.content,
+    )
     assertEquals(
         51.0,
         jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("lat")?.jsonPrimitive?.double!!,
-        0.00001)
+        0.00001,
+    )
     assertEquals(
         -20.0,
         jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("lon")?.jsonPrimitive?.double!!,
-        0.00001)
+        0.00001,
+    )
     assertEquals(
-        45, jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("rad")?.jsonPrimitive?.int)
+        45,
+        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("rad")?.jsonPrimitive?.int,
+    )
     assertEquals(
         123456789,
-        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("tst")?.jsonPrimitive?.int)
+        jsonNode["waypoints"]?.jsonArray?.get(0)?.jsonObject?.get("tst")?.jsonPrimitive?.int,
+    )
     assertTrue(jsonNode["TestBoolKey"]?.jsonPrimitive?.boolean ?: false)
     assertEquals(13487.0, jsonNode["TestFloatKey"]?.jsonPrimitive?.double ?: 0.0, 0.0001)
     assertEquals(13487, jsonNode["TestIntKey"]?.jsonPrimitive?.int)
@@ -571,18 +580,24 @@ class ParserTest {
     assertEquals("status", jsonNode["_type"]?.jsonPrimitive?.content)
     assertEquals(
         message.android?.wifistate,
-        jsonNode["android"]?.jsonObject?.get("wifi")?.jsonPrimitive?.int)
+        jsonNode["android"]?.jsonObject?.get("wifi")?.jsonPrimitive?.int,
+    )
     assertEquals(
-        message.android?.powerSave, jsonNode["android"]?.jsonObject?.get("ps")?.jsonPrimitive?.int)
+        message.android?.powerSave,
+        jsonNode["android"]?.jsonObject?.get("ps")?.jsonPrimitive?.int,
+    )
     assertEquals(
         message.android?.batteryOptimizations,
-        jsonNode["android"]?.jsonObject?.get("bo")?.jsonPrimitive?.int)
+        jsonNode["android"]?.jsonObject?.get("bo")?.jsonPrimitive?.int,
+    )
     assertEquals(
         message.android?.appHibernation,
-        jsonNode["android"]?.jsonObject?.get("hib")?.jsonPrimitive?.int)
+        jsonNode["android"]?.jsonObject?.get("hib")?.jsonPrimitive?.int,
+    )
     assertEquals(
         message.android?.locationPermission,
-        jsonNode["android"]?.jsonObject?.get("loc")?.jsonPrimitive?.int)
+        jsonNode["android"]?.jsonObject?.get("loc")?.jsonPrimitive?.int,
+    )
   }
 
   // endregion
@@ -715,5 +730,40 @@ class ParserTest {
     val parser = Parser(encryptionProvider)
     val input: String = MessageFixtures.INVALID_LOCATION_MESSAGE_MISSING_TID_AND_TOPIC
     parser.fromJson(input) as MessageLocation
+  }
+
+  @Test
+  fun `a location message on the equator and the prime meridian survives a round trip`() {
+    val parser = Parser(null)
+    val input =
+        MessageLocation().apply {
+          latitude = 0.0
+          longitude = 0.0
+          timestamp = 123456789L
+          trackerId = "aa"
+        }
+    val serialized = parser.toJsonPlain(input)
+    val jsonElement = json.parseToJsonElement(serialized).jsonObject
+    assertEquals(0.0, jsonElement["lat"]?.jsonPrimitive?.double!!, 0.0)
+    assertEquals(0.0, jsonElement["lon"]?.jsonPrimitive?.double!!, 0.0)
+
+    val deserialized = parser.fromJson(serialized) as MessageLocation
+    assertEquals(0.0, deserialized.latitude, 0.0)
+    assertEquals(0.0, deserialized.longitude, 0.0)
+  }
+
+  @Test
+  fun `a transition message on the equator and the prime meridian keeps its coordinates`() {
+    val parser = Parser(null)
+    val input =
+        MessageTransition().apply {
+          latitude = 0.0
+          longitude = 0.0
+          timestamp = 123456789L
+          setTransition(Geofence.GEOFENCE_TRANSITION_ENTER)
+        }
+    val jsonElement = json.parseToJsonElement(parser.toJsonPlain(input)).jsonObject
+    assertEquals(0.0, jsonElement["lat"]?.jsonPrimitive?.double!!, 0.0)
+    assertEquals(0.0, jsonElement["lon"]?.jsonPrimitive?.double!!, 0.0)
   }
 }

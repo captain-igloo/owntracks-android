@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.os.Build
+import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -14,6 +15,7 @@ import java.net.ConnectException
 import java.net.UnknownHostException
 import java.security.KeyStore
 import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.stream.Collectors
 import javax.net.ssl.SSLHandshakeException
 import kotlin.time.Duration.Companion.milliseconds
@@ -32,6 +34,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import org.eclipse.paho.client.mqttv3.IMqttActionListener
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
@@ -45,6 +48,7 @@ import org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_CONNECTION_LOST
 import org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_SERVER_CONNECT_ERROR
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.owntracks.android.data.EndpointState
+import org.owntracks.android.data.EndpointStatus
 import org.owntracks.android.data.repos.EndpointStateRepo
 import org.owntracks.android.di.ApplicationScope
 import org.owntracks.android.di.CoroutineScopes
@@ -70,10 +74,10 @@ class MQTTMessageProcessorEndpoint(
     private val preferences: Preferences,
     private val parser: Parser,
     private val caKeyStore: KeyStore,
-    @ApplicationScope private val scope: CoroutineScope,
-    @CoroutineScopes.IoDispatcher private val ioDispatcher: CoroutineDispatcher,
-    @ApplicationContext private val applicationContext: Context,
-    private val mqttConnectionIdlingResource: SimpleIdlingResource
+    @param:ApplicationScope private val scope: CoroutineScope,
+    @param:CoroutineScopes.IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    @param:ApplicationContext private val applicationContext: Context,
+    private val mqttConnectionIdlingResource: SimpleIdlingResource,
 ) :
     MessageProcessorEndpoint(messageProcessor),
     StatefulServiceMessageProcessor,
@@ -84,13 +88,15 @@ class MQTTMessageProcessorEndpoint(
   private val connectingLock = Semaphore(1)
   private val connectivityManager: ConnectivityManager = applicationContext.getSystemService()!!
   private val alarmManager: AlarmManager = applicationContext.getSystemService()!!
-  private var mqttClientAndConfiguration: MqttClientAndConfiguration? = null
+  @Volatile
+  @VisibleForTesting
+  internal var mqttClientAndConfiguration: MqttClientAndConfiguration? = null
 
   private var pingAlarmReceiver: BroadcastReceiver? = null
 
   internal val networkChangeCallback =
       NetworkTrackingCallback(
-          { endpointStateRepo.endpointState.value },
+          { endpointStateRepo.endpointState.value.state },
           { scope.launch { reconnect() } },
           {
             scope.launch {
@@ -100,13 +106,17 @@ class MQTTMessageProcessorEndpoint(
               // connection is torn down and no further reconnect is ever triggered.
               scheduler.scheduleMqttReconnect()
             }
-          })
+          },
+      )
 
   override fun activate() {
     Timber.v("MQTT Activate")
     preferences.registerOnPreferenceChangedListener(this)
     networkChangeCallback.reset()
     connectivityManager.registerDefaultNetworkCallback(networkChangeCallback)
+    // Backstop for everything the connectivity callbacks and the reconnect worker between them
+    // fail to notice — most importantly a connection that is dead but still believed to be up.
+    scheduler.scheduleMqttConnectionWatchdog()
     scope.launch {
       try {
         val configuration = getEndpointConfiguration()
@@ -117,12 +127,31 @@ class MQTTMessageProcessorEndpoint(
               Timber.e("MQTT Configuration not complete because host is missing, cannot activate")
           else -> Timber.e(e, "MQTT Configuration not complete, cannot activate")
         }
-        endpointStateRepo.setState(EndpointState.ERROR_CONFIGURATION.withError(e))
+        setEndpointState(EndpointState.ERROR_CONFIGURATION.withError(e))
       }
     }
   }
 
+  /*
+  Set when this endpoint is replaced. It may still be winding down (an MQTT disconnect finishes
+  asynchronously) or get late callbacks, and none of that should overwrite the state of the endpoint
+  that replaced it.
+   */
+  @Volatile private var deactivated = false
+
+  private suspend fun setEndpointState(status: EndpointStatus) {
+    if (deactivated) {
+      Timber.v("Ignoring endpoint state $status from a deactivated endpoint")
+      return
+    }
+    endpointStateRepo.setState(status)
+  }
+
+  private suspend fun setEndpointState(state: EndpointState) =
+      setEndpointState(EndpointStatus(state))
+
   override fun deactivate() {
+    deactivated = true
     preferences.unregisterOnPreferenceChangedListener(this)
     connectivityManager.unregisterNetworkCallback(networkChangeCallback)
     scope.launch {
@@ -137,41 +166,43 @@ class MQTTMessageProcessorEndpoint(
     withContext(ioDispatcher) {
       Timber.v("MQTT attempting Disconnect")
       measureTime {
-            mqttClientAndConfiguration?.run {
-              try {
-                mqttClient.disconnect()
-              } catch (e: MqttException) {
-                when (e.reasonCode.toShort()) {
-                  REASON_CODE_CLIENT_ALREADY_DISCONNECTED -> Timber.d("Client already disconnected")
-                  else -> {
-                    Timber.d(
-                        e,
-                        "Could not disconnect from client gently. Forcing disconnect with timeout=$disconnectTimeout")
-                    try {
-                      mqttClient.disconnectForcibly(
-                          disconnectTimeout.inWholeMilliseconds,
-                          disconnectTimeout.inWholeMilliseconds,
-                          true)
-                    } catch (e: Exception) {
-                      Timber.d(e, "Could not forcibly disconnect MQTT client. Ignoring.")
-                    }
-                  }
+        mqttClientAndConfiguration?.run {
+          try {
+            mqttClient.disconnect()
+          } catch (e: MqttException) {
+            when (e.reasonCode.toShort()) {
+              REASON_CODE_CLIENT_ALREADY_DISCONNECTED -> Timber.d("Client already disconnected")
+              else -> {
+                Timber.d(
+                    e,
+                    "Could not disconnect from client gently. Forcing disconnect with timeout=$disconnectTimeout",
+                )
+                try {
+                  mqttClient.disconnectForcibly(
+                      disconnectTimeout.inWholeMilliseconds,
+                      disconnectTimeout.inWholeMilliseconds,
+                      true,
+                  )
+                } catch (e: Exception) {
+                  Timber.d(e, "Could not forcibly disconnect MQTT client. Ignoring.")
                 }
-              }
-              endpointStateRepo.setState(EndpointState.DISCONNECTED)
-              try {
-                mqttClient.close(true)
-              } catch (e: Exception) {
-                Timber.w(e, "Error closing MQTT client. Ignoring.")
-              }
-              try {
-                pingAlarmReceiver?.run(applicationContext::unregisterReceiver)
-                Timber.d("Unregistered ping alarm receiver")
-              } catch (e: IllegalArgumentException) {
-                Timber.d("Ping alarm receiver already unregistered")
               }
             }
           }
+          setEndpointState(EndpointState.DISCONNECTED)
+          try {
+            mqttClient.close(true)
+          } catch (e: Exception) {
+            Timber.w(e, "Error closing MQTT client. Ignoring.")
+          }
+          try {
+            pingAlarmReceiver?.run(applicationContext::unregisterReceiver)
+            Timber.d("Unregistered ping alarm receiver")
+          } catch (_: IllegalArgumentException) {
+            Timber.d("Ping alarm receiver already unregistered")
+          }
+        }
+      }
           .apply { Timber.d("MQTT disconnected in $this") }
     }
   }
@@ -186,18 +217,21 @@ class MQTTMessageProcessorEndpoint(
 
   override suspend fun sendMessage(message: MessageBase): Result<Unit> {
     Timber.d("Sending message $message")
-    if (mqttClientAndConfiguration == null) {
-      return Result.failure(NotReadyException())
-    }
-    if (endpointStateRepo.endpointState.value != EndpointState.CONNECTED) {
+    val clientAndConfiguration =
+        mqttClientAndConfiguration ?: return Result.failure(NotReadyException())
+    if (endpointStateRepo.endpointState.value.state != EndpointState.CONNECTED) {
       return Result.failure(NotConnectedException())
     }
     // Updates the message data + metadata with things that are in our preferences
     message.annotateFromPreferences(preferences)
 
+    if (!awaitInFlightCapacity(clientAndConfiguration)) {
+      return Result.failure(NotConnectedException())
+    }
+
     // We want to block until this completes off-thread, because we've been called sync by the
     // outgoing message loop
-    return mqttClientAndConfiguration!!.run {
+    return clientAndConfiguration.run {
       runBlocking {
         var sendMessageThrowable: Throwable? = null
         val handler = CoroutineExceptionHandler { _, throwable -> sendMessageThrowable = throwable }
@@ -206,19 +240,15 @@ class MQTTMessageProcessorEndpoint(
               try {
                 Timber.d("Publishing message $message")
                 measureTime {
-                      while (mqttClient.inFlightMessageCount >=
-                          mqttConnectionConfiguration.maxInFlight) {
-                        Timber.v("Pausing to wait for inflight to drop below max")
-                        delay(100.milliseconds)
-                      }
-                      mqttClient
-                          .publish(
-                              message.topic,
-                              message.toJsonBytes(parser),
-                              message.qos,
-                              message.retained)
-                          .also { Timber.v("MQTT message sent with messageId=${it.messageId}. ") }
-                    }
+                  mqttClient
+                      .publish(
+                          message.topic,
+                          message.toJsonBytes(parser),
+                          message.qos,
+                          message.retained,
+                      )
+                      .also { Timber.v("MQTT message sent with messageId=${it.messageId}. ") }
+                }
                     .apply { Timber.i("Message $message sent in $this") }
               } catch (e: Exception) {
                 Timber.w(e, "Error publishing message $message")
@@ -246,6 +276,48 @@ class MQTTMessageProcessorEndpoint(
     }
   }
 
+  /**
+   * Waits for the client's in-flight message count to drop below the configured max.
+   *
+   * Bounded, and gives up as soon as [clientAndConfiguration] stops being the current, connected
+   * client: a client that's been replaced by a reconnect never gets its in-flight messages acked,
+   * so waiting on it would wedge the outbound message loop forever while the new client sits idle.
+   *
+   * @return true if there's capacity to publish on this client, false if the message should be
+   *   re-queued
+   */
+  private suspend fun awaitInFlightCapacity(
+      clientAndConfiguration: MqttClientAndConfiguration
+  ): Boolean {
+    val (client, configuration) = clientAndConfiguration
+    if (client.inFlightMessageCount < configuration.maxInFlight) {
+      return true
+    }
+    Timber.d(
+        "MQTT in-flight count ${client.inFlightMessageCount} is at max " +
+            "${configuration.maxInFlight}, waiting for it to drop"
+    )
+    return withTimeoutOrNull(IN_FLIGHT_WAIT_TIMEOUT) {
+      while (client.inFlightMessageCount >= configuration.maxInFlight) {
+        if (
+            mqttClientAndConfiguration !== clientAndConfiguration ||
+                endpointStateRepo.endpointState.value.state != EndpointState.CONNECTED
+        ) {
+          Timber.w("MQTT client replaced or disconnected while waiting for in-flight to drop")
+          return@withTimeoutOrNull false
+        }
+        delay(100.milliseconds)
+      }
+      true
+    }
+        ?: false.also {
+          Timber.w(
+              "Timed out after $IN_FLIGHT_WAIT_TIMEOUT waiting for MQTT in-flight count " +
+                  "${client.inFlightMessageCount} to drop below ${configuration.maxInFlight}"
+          )
+        }
+  }
+
   override fun onPreferenceChanged(properties: Set<String>) {
     if (preferences.mode != ConnectionMode.MQTT || mqttClientAndConfiguration == null) {
       Timber.d("Preference changed but MQTT not activated. Ignoring.")
@@ -264,12 +336,15 @@ class MQTTMessageProcessorEndpoint(
             Preferences::mqttProtocolLevel.name,
             Preferences::password.name,
             Preferences::tls.name,
-            Preferences::ws.name)
-    if (propertiesWeWantToReconnectOn
-        .stream()
-        .filter(properties::contains)
-        .collect(Collectors.toSet())
-        .isNotEmpty()) {
+            Preferences::ws.name,
+        )
+    if (
+        propertiesWeWantToReconnectOn
+            .stream()
+            .filter(properties::contains)
+            .collect(Collectors.toSet())
+            .isNotEmpty()
+    ) {
       Timber.d("Reconnecting to broker because of preference change")
       scope.launch {
         try {
@@ -277,8 +352,8 @@ class MQTTMessageProcessorEndpoint(
         } catch (e: Exception) {
           when (e) {
             is ConfigurationIncompleteException ->
-                endpointStateRepo.setState(EndpointState.ERROR_CONFIGURATION.withError(e))
-            else -> endpointStateRepo.setState(EndpointState.ERROR.withError(e))
+                setEndpointState(EndpointState.ERROR_CONFIGURATION.withError(e))
+            else -> setEndpointState(EndpointState.ERROR.withError(e))
           }
         }
       }
@@ -293,7 +368,7 @@ class MQTTMessageProcessorEndpoint(
             is IOException -> Timber.w("Connection Lost: ${cause.message}")
             else -> Timber.w(cause, "Connection Lost")
           }
-          scope.launch { endpointStateRepo.setState(EndpointState.DISCONNECTED) }
+          scope.launch { setEndpointState(EndpointState.DISCONNECTED) }
           scheduler.scheduleMqttReconnect()
         }
 
@@ -303,7 +378,8 @@ class MQTTMessageProcessorEndpoint(
             onMessageReceived(
                 MessageClear().apply {
                   this.topic = topic.replace(MessageCard.BASETOPIC_SUFFIX, "")
-                })
+                }
+            )
           } else {
             try {
               Timber.d("Received message: ${String(message.payload)}")
@@ -315,10 +391,11 @@ class MQTTMessageProcessorEndpoint(
                         this.retained = message.isRetained
                         this.qos = message.qos
                       }
-                      .also { Timber.d("Parsed message: $it") })
-            } catch (e: Parser.EncryptionException) {
+                      .also { Timber.d("Parsed message: $it") }
+              )
+            } catch (_: Parser.EncryptionException) {
               Timber.e("Unable to decrypt received message ${message.id} on $topic")
-            } catch (e: SerializationException) {
+            } catch (_: SerializationException) {
               Timber.w("Malformed JSON message received ${message.id} on $topic")
             }
           }
@@ -327,7 +404,8 @@ class MQTTMessageProcessorEndpoint(
         override fun deliveryComplete(token: IMqttDeliveryToken?) {
           token?.run {
             Timber.v(
-                "Delivery complete messageId=$messageId topics=${(topics?: emptyArray()).joinToString(",")}}")
+                "Delivery complete messageId=$messageId topics=${(topics?: emptyArray()).joinToString(",")}}"
+            )
           }
         }
 
@@ -346,99 +424,112 @@ class MQTTMessageProcessorEndpoint(
       withContext(ioDispatcher) {
         Timber.v("MQTT connect to Broker")
         measureTimedValue {
-              endpointStateRepo.setState(EndpointState.CONNECTING)
-              try {
-                val executorService = ScheduledThreadPoolExecutor(8)
-                val pingSender =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                        alarmManager.canScheduleExactAlarms()) {
-                      AlarmPingSender(applicationContext)
-                    } else {
-                      AsyncPingSender(scope)
-                    }
+          setEndpointState(EndpointState.CONNECTING)
+          try {
+            val executorService = ScheduledThreadPoolExecutor(8)
+            val pingSender =
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        alarmManager.canScheduleExactAlarms()
+                ) {
+                  AlarmPingSender(applicationContext)
+                } else {
+                  AsyncPingSender(scope)
+                }
 
-                MqttAsyncClient(
-                        mqttConnectionConfiguration.connectionString,
-                        mqttConnectionConfiguration.clientId,
-                        RoomMqttClientPersistence(applicationContext),
-                        pingSender,
-                        executorService,
-                        AndroidHighResolutionTimer())
-                    .also {
-                      mqttClientAndConfiguration =
-                          MqttClientAndConfiguration(it, mqttConnectionConfiguration)
-                    }
-                    .apply {
-                      mqttConnectionConfiguration
-                          .getConnectOptions(applicationContext, caKeyStore)
-                          .also {
-                            Timber.d(
-                                "Connecting to ${mqttConnectionConfiguration.connectionString} timeout = ${ it.connectionTimeout.toDuration(DurationUnit.SECONDS)}")
-                          }
-                          .run { connect(this).waitForCompletion() }
-                      pingAlarmReceiver = MQTTPingAlarmReceiver(this)
-                      ContextCompat.registerReceiver(
-                              applicationContext,
-                              pingAlarmReceiver,
-                              IntentFilter(AlarmPingSender.PING_INTENT_ACTION),
-                              ContextCompat.RECEIVER_EXPORTED)
-                          .also { Timber.d("Registered ping alarm receiver") }
-                      Timber.i(
-                          "MQTT Connected. Subscribing to ${mqttConnectionConfiguration.topicsToSubscribeTo}")
-                      endpointStateRepo.setState(EndpointState.CONNECTED)
-                      setCallback(mqttCallback)
-                      subscribe(
-                              mqttConnectionConfiguration.topicsToSubscribeTo.toTypedArray(),
-                              IntArray(mqttConnectionConfiguration.topicsToSubscribeTo.size) {
-                                mqttConnectionConfiguration.subQos.value
-                              })
-                          .waitForCompletion()
-                      Timber.d("MQTT Subscribed")
+            MqttAsyncClient(
+                    mqttConnectionConfiguration.connectionString,
+                    mqttConnectionConfiguration.clientId,
+                    RoomMqttClientPersistence(applicationContext),
+                    pingSender,
+                    executorService,
+                    AndroidHighResolutionTimer(),
+                )
+                .also {
+                  mqttClientAndConfiguration =
+                      MqttClientAndConfiguration(it, mqttConnectionConfiguration)
+                }
+                .apply {
+                  mqttConnectionConfiguration
+                      .getConnectOptions(applicationContext, caKeyStore)
+                      .also {
+                        Timber.d(
+                            "Connecting to ${mqttConnectionConfiguration.connectionString} timeout = ${ it.connectionTimeout.toDuration(DurationUnit.SECONDS)}"
+                        )
+                      }
+                      .run { connect(this).waitForCompletion() }
+                  pingAlarmReceiver = MQTTPingAlarmReceiver(this)
+                  ContextCompat.registerReceiver(
+                          applicationContext,
+                          pingAlarmReceiver,
+                          IntentFilter(AlarmPingSender.PING_INTENT_ACTION),
+                          ContextCompat.RECEIVER_EXPORTED,
+                      )
+                      .also { Timber.d("Registered ping alarm receiver") }
+                  Timber.i(
+                      "MQTT Connected. Subscribing to ${mqttConnectionConfiguration.topicsToSubscribeTo}"
+                  )
+                  setEndpointState(EndpointState.CONNECTED)
+                  // This run of failures is over, so the next one starts from the short delay
+                  // again rather than inheriting however far this one had backed off.
+                  scheduler.resetMqttReconnectBackoff()
+                  setCallback(mqttCallback)
+                  subscribe(
+                          mqttConnectionConfiguration.topicsToSubscribeTo.toTypedArray(),
+                          IntArray(mqttConnectionConfiguration.topicsToSubscribeTo.size) {
+                            mqttConnectionConfiguration.subQos.value
+                          },
+                      )
+                      .waitForCompletion()
+                  Timber.d("MQTT Subscribed")
 
-                      messageProcessor.notifyOutgoingMessageQueue()
-                      if (preferences.publishLocationOnConnect) {
-                        // TODO fix the trigger here
-                        messageProcessor.publishLocationMessage(MessageLocation.ReportType.DEFAULT)
-                      }
-                    }
-                Result.success(Unit)
-              } catch (e: Exception) {
-                val errorLog = "MQTT client unable to connect to endpoint"
-                when (e) {
-                  is MqttException -> {
-                    when (e.reasonCode) {
-                      REASON_CODE_CONNECTION_LOST.toInt() ->
-                          Timber.w(
-                              e.cause,
-                              "MQTT client unable to connect to endpoint because the connection was lost")
-                      REASON_CODE_CLIENT_EXCEPTION.toInt() ->
-                          when (e.cause) {
-                            is SSLHandshakeException ->
-                                Timber.e("$errorLog: ${(e.cause as SSLHandshakeException).message}")
-                            is UnknownHostException ->
-                                Timber.e(
-                                    "$errorLog: Unknown host \"${(e.cause as UnknownHostException).message}\"")
-                            else -> Timber.e(e, errorLog)
-                          }
-                      REASON_CODE_SERVER_CONNECT_ERROR.toInt() -> {
-                        when (e.cause) {
-                          is ConnectException -> {
-                            Timber.w("$errorLog: ${(e.cause as ConnectException).message}")
-                          }
-                        }
-                      }
-                      else -> Timber.e(e, errorLog)
-                    }
-                  }
-                  else -> {
-                    Timber.e(e, errorLog)
+                  messageProcessor.notifyOutgoingMessageQueue()
+                  if (preferences.publishLocationOnConnect) {
+                    // TODO fix the trigger here
+                    messageProcessor.publishLocationMessage(MessageLocation.ReportType.DEFAULT)
                   }
                 }
-                endpointStateRepo.setState(EndpointState.ERROR.withError(e))
-                scheduler.scheduleMqttReconnect()
-                Result.failure(e)
+            Result.success(Unit)
+          } catch (e: Exception) {
+            val errorLog = "MQTT client unable to connect to endpoint"
+            when (e) {
+              is MqttException -> {
+                when (e.reasonCode) {
+                  REASON_CODE_CONNECTION_LOST.toInt() -> {
+                    Timber.d(e.cause)
+                    Timber.w(
+                        "MQTT client unable to connect to endpoint because the connection was lost",
+                    )
+                  }
+                  REASON_CODE_CLIENT_EXCEPTION.toInt() ->
+                      when (e.cause) {
+                        is SSLHandshakeException ->
+                            Timber.e("$errorLog: ${(e.cause as SSLHandshakeException).message}")
+                        is UnknownHostException ->
+                            Timber.e(
+                                "$errorLog: Unknown host \"${(e.cause as UnknownHostException).message}\""
+                            )
+                        else -> Timber.e(e, errorLog)
+                      }
+                  REASON_CODE_SERVER_CONNECT_ERROR.toInt() -> {
+                    when (e.cause) {
+                      is ConnectException -> {
+                        Timber.w("$errorLog: ${(e.cause as ConnectException).message}")
+                      }
+                    }
+                  }
+                  else -> Timber.e(e, errorLog)
+                }
+              }
+              else -> {
+                Timber.e(e, errorLog)
               }
             }
+            setEndpointState(EndpointState.ERROR.withError(e))
+            scheduler.scheduleMqttReconnect()
+            Result.failure(e)
+          }
+        }
             .apply { Timber.d("MQTT connection attempt completed in ${this.duration}") }
             .value
       }
@@ -449,7 +540,7 @@ class MQTTMessageProcessorEndpoint(
             reconnect(getEndpointConfiguration())
           } catch (e: ConfigurationIncompleteException) {
             Timber.w("MQTT not configured, skipping reconnect: ${e.message}")
-            endpointStateRepo.setState(EndpointState.ERROR_CONFIGURATION.withError(e))
+            setEndpointState(EndpointState.ERROR_CONFIGURATION.withError(e))
             Result.failure(e)
           }
 
@@ -466,35 +557,56 @@ class MQTTMessageProcessorEndpoint(
         }
       }
 
-  override fun checkConnection(): Boolean {
-    return mqttClientAndConfiguration?.mqttClient?.run {
-      var success = false
-      val token =
-          checkPing(
-              null,
-              object : IMqttActionListener {
-                override fun onSuccess(asyncActionToken: IMqttToken?) {
-                  success = true
-                }
+  /**
+   * Round-trips an MQTT PINGREQ to establish whether the connection is actually usable, rather than
+   * merely believed to be. A TCP connection that has gone away without a FIN — routine when a
+   * mobile network drops or a NAT entry expires — stays readable as "connected" until something is
+   * written to it, so the endpoint state on its own is not evidence of a working link.
+   *
+   * Blocking, and called from the connection watchdog off the main thread.
+   */
+  override fun checkConnection(): Boolean =
+      mqttClientAndConfiguration?.mqttClient?.let { client ->
+        // The listener is invoked on a Paho thread, so this cannot be a plain captured var.
+        val success = AtomicBoolean(false)
+        try {
+          client
+              .checkPing(
+                  null,
+                  object : IMqttActionListener {
+                    override fun onSuccess(asyncActionToken: IMqttToken?) {
+                      success.set(true)
+                    }
 
-                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
-                  success = false
-                }
-              })
-      if (token != null) {
-        token.waitForCompletion()
-      } else {
-        Timber.w("MQTT checkPing token was null")
-      }
-      return success
-    } ?: false
-  }
+                    override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                      success.set(false)
+                    }
+                  },
+              )
+              ?.waitForCompletion(PING_CHECK_TIMEOUT.inWholeMilliseconds)
+              ?: Timber.w("MQTT checkPing token was null")
+          success.get()
+        } catch (e: Exception) {
+          // Both a timeout waiting for the PINGRESP and a client that already knows it is
+          // disconnected arrive here. Either way the connection is not usable.
+          Timber.w(e, "MQTT connection check failed")
+          false
+        }
+      } ?: false
 
   class NotConnectedException : Exception()
 
+  companion object {
+    /** Bounded so the watchdog cannot be parked indefinitely on an unresponsive broker. */
+    private val PING_CHECK_TIMEOUT = 10.seconds
+
+    /** Bounded so the outbound message loop cannot be parked indefinitely on a stuck client. */
+    private val IN_FLIGHT_WAIT_TIMEOUT = 30.seconds
+  }
+
   data class MqttClientAndConfiguration(
       val mqttClient: MqttAsyncClient,
-      val mqttConnectionConfiguration: MqttConnectionConfiguration
+      val mqttConnectionConfiguration: MqttConnectionConfiguration,
   )
 }
 
@@ -508,14 +620,13 @@ class MQTTMessageProcessorEndpoint(
  */
 private suspend fun <T> Semaphore.withPermitLogged(label: String, function: suspend () -> T): T {
   return also {
-        Timber.v("Waiting for lock. label=$label available permits = ${it.availablePermits}")
-      }
+    Timber.v("Waiting for lock. label=$label available permits = ${it.availablePermits}")
+  }
       .withPermit {
         Timber.v("lock acquired label=$label")
         try {
           function()
         } catch (e: Exception) {
-          Timber.e(e, "BOO")
           throw e
         } finally {
           Timber.v("lock released label=$label")

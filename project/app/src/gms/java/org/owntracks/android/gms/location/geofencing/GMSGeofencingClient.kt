@@ -9,17 +9,26 @@ import com.google.android.gms.location.LocationServices
 import org.owntracks.android.location.geofencing.GeofencingClient
 import org.owntracks.android.location.geofencing.GeofencingRequest
 import org.owntracks.android.services.BackgroundService
+import timber.log.Timber
 
 class GMSGeofencingClient(
     private val geofencingClient: com.google.android.gms.location.GeofencingClient
 ) : GeofencingClient {
   override fun removeGeofences(context: Context) {
-    this.geofencingClient.removeGeofences(getPendingIntent(context))
+    this.geofencingClient
+        .removeGeofences(getPendingIntent(context))
+        .addOnSuccessListener { Timber.d("Geofences removed successfully") }
+        .addOnFailureListener { Timber.e(it, "Failed to remove geofences") }
   }
 
   @RequiresPermission(anyOf = ["android.permission.ACCESS_FINE_LOCATION"])
   override fun addGeofences(request: GeofencingRequest, context: Context) {
-    this.geofencingClient.addGeofences(request.toGMSGeofencingRequest(), getPendingIntent(context))
+    val gmsRequest = request.toGMSGeofencingRequest()
+    Timber.d("Adding ${gmsRequest.geofences?.size ?: 0} geofences via GMS")
+    this.geofencingClient
+        .addGeofences(gmsRequest, getPendingIntent(context))
+        .addOnSuccessListener { Timber.i("Geofences added successfully") }
+        .addOnFailureListener { Timber.e(it, "Failed to add geofences") }
   }
 
   private fun getPendingIntent(context: Context): PendingIntent {

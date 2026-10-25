@@ -8,6 +8,7 @@ import androidx.test.espresso.Espresso
 import androidx.test.espresso.IdlingResource
 import androidx.test.espresso.intent.Intents
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.WorkManager
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import com.adevinta.android.barista.interaction.BaristaDrawerInteractions.openDrawer
 import com.adevinta.android.barista.rule.BaristaRule
@@ -19,8 +20,9 @@ import dagger.hilt.android.testing.HiltAndroidRule
 import java.lang.reflect.ParameterizedType
 import javax.inject.Inject
 import javax.inject.Named
+import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
-import kotlinx.datetime.Clock
+import kotlin.time.ExperimentalTime
 import leakcanary.DetectLeaksAfterTestSuccess
 import leakcanary.LeakCanary
 import org.junit.After
@@ -43,6 +45,7 @@ import org.owntracks.android.ui.preferences.load.LoadActivity
 import shark.AndroidReferenceMatchers
 import timber.log.Timber
 
+@OptIn(ExperimentalTime::class)
 abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boolean = true) :
     TestWithCoverageEnabled() {
   @Suppress("UNCHECKED_CAST")
@@ -78,27 +81,34 @@ abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boole
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.permission.PermissionUsageHelper",
                         fieldName = "mContext",
-                        description = "Android API31 leaks contexts") +
+                        description = "Android API31 leaks contexts",
+                    ) +
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.permission.PermissionUsageHelper",
                         fieldName = "mPackageManager",
-                        description = "Android API31 leaks contexts") +
+                        description = "Android API31 leaks contexts",
+                    ) +
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.permission.PermissionUsageHelper",
                         fieldName = "mUserContexts",
-                        description = "Android API31 leaks contexts") +
+                        description = "Android API31 leaks contexts",
+                    ) +
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.app.AppOpsManager",
                         fieldName = "mContext",
-                        description = "Android API31 leaks contexts") +
+                        description = "Android API31 leaks contexts",
+                    ) +
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.app.ApplicationPackageManager",
                         fieldName = "mContext",
-                        description = "Android API31 leaks contexts") +
+                        description = "Android API31 leaks contexts",
+                    ) +
                     AndroidReferenceMatchers.instanceFieldLeak(
                         className = "android.app.ApplicationPackageManager",
                         fieldName = "mPermissionManager",
-                        description = "Android API31 leaks contexts"))
+                        description = "Android API31 leaks contexts",
+                    )
+        )
   }
 
   @get:Rule
@@ -119,6 +129,12 @@ abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boole
   fun setUp() {
 
     hiltRule.inject()
+    // clearPackageData is off, so work enqueued by a previous test (MQTT reconnects, the connection
+    // watchdog, location pings) survives into this one's process and would otherwise fire mid-test.
+    WorkManager.getInstance(InstrumentationRegistry.getInstrumentation().targetContext)
+        .cancelAllWork()
+        .result
+        .get()
     Intents.init()
     if (startActivity) {
       launchActivity()
@@ -164,7 +180,8 @@ abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boole
         app,
         Intent(app, BackgroundService::class.java).apply {
           action = "org.owntracks.android.CLEAR_CONTACTS"
-        })
+        },
+    )
     Timber.v("Waiting for contacts to be cleared")
     contactsClearedIdlingResource.use { Espresso.onIdle() }
     Timber.v("Test setup complete")
@@ -209,7 +226,7 @@ abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boole
 
   fun reportLocationFromMap(
       locationIdlingResource: IdlingResource?,
-      mockLocationFunction: () -> Unit = {}
+      mockLocationFunction: () -> Unit = {},
   ) {
     if (getCurrentActivity() !is MapActivity && getCurrentActivity() !is LoadActivity) {
       openDrawer()
@@ -217,7 +234,13 @@ abstract class TestWithAnActivity<T : Activity>(private val startActivity: Boole
     }
     waitUntilActivityVisible()
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeMove)
+    // If dialog didn't open (e.g., tap became long press under GC pressure), retry once
+    try {
+      waitUntilViewDisplayed(R.id.fabMonitoringModeMove, timeout = 2.seconds)
+    } catch (_: Throwable) {
+      clickOn(R.id.menu_monitoring)
+    }
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeMove)
     mockLocationFunction()
 
     locationIdlingResource.use(5.seconds) {

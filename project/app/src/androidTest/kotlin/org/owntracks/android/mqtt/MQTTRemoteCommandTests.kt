@@ -12,9 +12,9 @@ import com.adevinta.android.barista.assertion.BaristaVisibilityAssertions.assert
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import com.adevinta.android.barista.interaction.BaristaDrawerInteractions.openDrawer
 import dagger.hilt.android.testing.HiltAndroidTest
-import mqtt.packets.Qos
-import mqtt.packets.mqtt.MQTTPublish
-import mqtt.packets.mqttv5.MQTT5Properties
+import io.github.davidepianca98.mqtt.packets.Qos
+import io.github.davidepianca98.mqtt.packets.mqtt.MQTTPublish
+import io.github.davidepianca98.mqtt.packets.mqttv5.MQTT5Properties
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,6 +38,7 @@ import org.owntracks.android.testutils.addWaypoint
 import org.owntracks.android.testutils.di.setLocation
 import org.owntracks.android.testutils.getPreferences
 import org.owntracks.android.testutils.use
+import org.owntracks.android.testutils.waitAndClickWithMinVisibility
 import org.owntracks.android.testutils.waitUntilTrue
 import org.owntracks.android.ui.map.MapActivity
 
@@ -50,9 +51,9 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_an_invalid_command_message_then_nothing_happens() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     messageReceivedIdlingResource.add(MessageUnknown)
     listOf(
             // language=JSON
@@ -81,15 +82,15 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_reportlocation_command_message_then_a_response_location_is_sent_back_to_the_broker() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     reportLocationFromMap(mockLocationIdlingResource) {
-      mockLocationProviderClient.setLocation(52.0, 0.0)
+      mockLocationProviderClient.setLocation(52.0, 1.0)
     }
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     baristaRule.activityTestRule.activity.publishResponseMessageIdlingResource.setIdleState(false)
     listOf(MessageCmd().apply { action = CommandAction.REPORT_LOCATION })
@@ -123,17 +124,18 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_waypoints_response_message_then_a_waypoints_message_is_sent_back_to_the_broker() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     openDrawer()
     clickOn(R.string.title_activity_waypoints)
 
     addWaypoint("test waypoint", "51.123", "0.456", "20")
+    Thread.sleep(1000) // ensure distinct epoch-second tst values (tst has second precision)
     addWaypoint("test waypoint 2", "51.00", "0.4", "25")
 
     openDrawer()
@@ -171,12 +173,12 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_set_waypoints_command_message_then_the_waypoints_are_merged_with_the_existing_waypoints() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     openDrawer()
     clickOn(R.string.title_activity_waypoints)
@@ -242,12 +244,12 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_clear_waypoints_command_message_then_the_waypoints_are_cleared() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     openDrawer()
     clickOn(R.string.title_activity_waypoints)
@@ -282,12 +284,12 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_clear_waypoints_command_message_to_the_wrong_topic_then_the_waypoints_are_not_cleared() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
 
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     openDrawer()
     clickOn(R.string.title_activity_waypoints)
@@ -322,9 +324,9 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_setconfiguration_response_message_then_the_configuration_is_set_in_the_preferences() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     PreferenceManager.getDefaultSharedPreferences(baristaRule.activityTestRule.activity).edit {
       putBoolean("remoteConfiguration", true)
     }
@@ -363,9 +365,9 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_to_not_accept_remote_configs_when_the_broker_sends_a_setconfiguration_response_message_then_the_configuration_is_not_set_in_the_preferences() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     PreferenceManager.getDefaultSharedPreferences(baristaRule.activityTestRule.activity).edit {
       putBoolean("remoteConfiguration", false)
     }
@@ -405,14 +407,14 @@ class MQTTRemoteCommandTests :
 
   @Test
   fun given_an_mqtt_configured_client_when_the_broker_sends_a_status_response_message_then_a_status_message_is_sent_back_to_the_broker() {
-    setupTestActivity({
+    setupTestActivity {
       configureMQTTConnectionToLocalWithGeneratedPassword(saveConfigurationIdlingResource)
-    })
+    }
     reportLocationFromMap(mockLocationIdlingResource) {
-      mockLocationProviderClient.setLocation(52.0, 0.0)
+      mockLocationProviderClient.setLocation(52.0, 1.0)
     }
     clickOn(R.id.menu_monitoring)
-    clickOn(R.id.fabMonitoringModeSignificantChanges)
+    waitAndClickWithMinVisibility(R.id.fabMonitoringModeSignificantChanges)
 
     baristaRule.activityTestRule.activity.publishResponseMessageIdlingResource.setIdleState(false)
     listOf(MessageCmd().apply { action = CommandAction.STATUS })

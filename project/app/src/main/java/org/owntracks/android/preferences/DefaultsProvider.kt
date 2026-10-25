@@ -34,6 +34,9 @@ interface DefaultsProvider {
       Preferences::fusedRegionDetection -> true
       Preferences::firstStart -> true
       Preferences::host -> ""
+      Preferences::allowIntentControl -> false
+      Preferences::intentAuthKey -> java.util.UUID.randomUUID().toString()
+      Preferences::allowConfigurationByURIAndConfigFile -> false
       Preferences::ignoreInaccurateLocations -> 0
       Preferences::ignoreStaleLocations -> 0f
       Preferences::info -> true
@@ -41,6 +44,8 @@ interface DefaultsProvider {
       Preferences::locatorDisplacement -> 500
       Preferences::locatorInterval -> 60
       Preferences::locatorPriority -> null
+      Preferences::useGNSSInSignificantMonitoringMode -> false
+      Preferences::maxImplausibleSpeedKmh -> 0
       Preferences::mode -> ConnectionMode.MQTT
       Preferences::monitoring -> MonitoringMode.Significant
       Preferences::moveModeLocatorInterval -> 10

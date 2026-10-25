@@ -125,12 +125,13 @@ abstract class PreferencesStore :
                 LocatorPriority.getByValue(getString(property.name, "") ?: "")
             else ->
                 throw UnsupportedPreferenceTypeException(
-                    "Trying to get property ${property.name} has type ${property.returnType}")
+                    "Trying to get property ${property.name} has type ${property.returnType}"
+                )
           }
               as T
-        } catch (e: java.lang.ClassCastException) {
+        } catch (_: java.lang.ClassCastException) {
           getAndSetDefault(preferences, property)
-        } catch (e: java.lang.IllegalArgumentException) {
+        } catch (_: java.lang.IllegalArgumentException) {
           getAndSetDefault(preferences, property)
         }
       } else {
@@ -147,8 +148,10 @@ abstract class PreferencesStore :
    */
   private fun <T> getAndSetDefault(preferences: Preferences, property: KProperty<*>): T {
     return getDefaultValue<T>(preferences, property).also {
-      Timber.i("Setting default preference value for ${property.name} to $it")
-      setValueWithoutNotifying(preferences, property, it)
+      if (it != null) {
+        Timber.d("Setting default preference value for ${property.name} to $it")
+        setValueWithoutNotifying(preferences, property, it)
+      }
     }
   }
 
@@ -173,7 +176,7 @@ abstract class PreferencesStore :
   class Transaction
   internal constructor(
       private val preferences: Preferences,
-      private val preferencesStore: PreferencesStore
+      private val preferencesStore: PreferencesStore,
   ) : Closeable {
     init {
       preferencesStore.setterTransaction = this
@@ -203,7 +206,7 @@ abstract class PreferencesStore :
   private fun <T> setValueWithoutNotifying(
       preferences: Preferences,
       property: KProperty<*>,
-      value: T
+      value: T,
   ): Boolean {
     val coercedValue = getCoercion(property, value, preferences)
     Timber.d("Setting preference ${property.name} to $value (coerced to $coercedValue)")
@@ -226,7 +229,8 @@ abstract class PreferencesStore :
               ?: true.also { remove(property.name) }
       else ->
           throw UnsupportedPreferenceTypeException(
-              "Trying to set property ${property.name} has type ${property.returnType}")
+              "Trying to set property ${property.name} has type ${property.returnType}"
+          )
     }
   }
 

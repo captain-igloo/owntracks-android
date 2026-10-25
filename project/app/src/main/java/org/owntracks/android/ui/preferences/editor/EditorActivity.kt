@@ -53,7 +53,7 @@ class EditorActivity : AppCompatActivity() {
           supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
           // Handle window insets for edge-to-edge
-          ViewCompat.setOnApplyWindowInsetsListener(frame) { view, windowInsets ->
+          ViewCompat.setOnApplyWindowInsetsListener(frame) { _, windowInsets ->
             val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
             appbar.root.updatePadding(top = insets.top)
             WindowInsetsCompat.CONSUMED
@@ -108,7 +108,8 @@ class EditorActivity : AppCompatActivity() {
     // Set autocomplete items
     val inputKeyView = layout.findViewById<MaterialAutoCompleteTextView>(R.id.inputKey)
     inputKeyView.setAdapter(
-        ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, viewModel.preferenceKeys))
+        ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, viewModel.preferenceKeys)
+    )
     builder
         .setTitle(R.string.preferencesEditor)
         .setPositiveButton(R.string.accept) { dialog: DialogInterface, _: Int ->
@@ -137,44 +138,38 @@ class EditorActivity : AppCompatActivity() {
         when (activityResult.resultCode) {
           RESULT_OK -> {
             val exportedConfig = viewModel.effectiveConfiguration.value
-            if (exportedConfig != null) {
-              activityResult.data?.data?.apply {
-                lifecycleScope.launch(ioDispatcher) {
-                  contentResolver.openOutputStream(this@apply)?.use {
-                    it.write(exportedConfig.toByteArray())
-                  }
-                  withContext(mainDispatcher) {
-                    Snackbar.make(
-                            findViewById(R.id.effectiveConfiguration),
-                            R.string.preferencesExportSuccess,
-                            Snackbar.LENGTH_SHORT)
-                        .show()
-                  }
+            activityResult.data?.data?.apply {
+              lifecycleScope.launch(ioDispatcher) {
+                contentResolver.openOutputStream(this@apply)?.use {
+                  it.write(exportedConfig.toByteArray())
+                }
+                withContext(mainDispatcher) {
+                  Snackbar.make(
+                          findViewById(R.id.effectiveConfiguration),
+                          R.string.preferencesExportSuccess,
+                          Snackbar.LENGTH_SHORT,
+                      )
+                      .show()
                 }
               }
-                  ?: run {
-                    Timber.e("Could not export config, save location was null")
-                    Snackbar.make(
-                            findViewById(R.id.effectiveConfiguration),
-                            R.string.preferencesExportError,
-                            Snackbar.LENGTH_SHORT)
-                        .show()
-                  }
-            } else {
-              Timber.e("Could not export config, config was null")
-              Snackbar.make(
-                      findViewById(R.id.effectiveConfiguration),
-                      R.string.preferencesExportError,
-                      Snackbar.LENGTH_SHORT)
-                  .show()
             }
+                ?: run {
+                  Timber.e("Could not export config, save location was null")
+                  Snackbar.make(
+                          findViewById(R.id.effectiveConfiguration),
+                          R.string.preferencesExportError,
+                          Snackbar.LENGTH_SHORT,
+                      )
+                      .show()
+                }
           }
           RESULT_CANCELED -> {
             Timber.e("Could not export config, export was cancelled")
             Snackbar.make(
                     findViewById(R.id.effectiveConfiguration),
                     R.string.preferencesExportError,
-                    Snackbar.LENGTH_SHORT)
+                    Snackbar.LENGTH_SHORT,
+                )
                 .show()
           }
         }
@@ -193,7 +188,8 @@ class EditorActivity : AppCompatActivity() {
     Snackbar.make(
             findViewById(R.id.effectiveConfiguration),
             R.string.preferencesLoadFailed,
-            Snackbar.LENGTH_SHORT)
+            Snackbar.LENGTH_SHORT,
+        )
         .show()
   }
 
@@ -201,7 +197,8 @@ class EditorActivity : AppCompatActivity() {
     Snackbar.make(
             findViewById(R.id.effectiveConfiguration),
             R.string.preferencesEditorKeyError,
-            Snackbar.LENGTH_SHORT)
+            Snackbar.LENGTH_SHORT,
+        )
         .show()
   }
 
@@ -209,7 +206,8 @@ class EditorActivity : AppCompatActivity() {
     Snackbar.make(
             findViewById(R.id.effectiveConfiguration),
             R.string.preferencesEditorValueError,
-            Snackbar.LENGTH_SHORT)
+            Snackbar.LENGTH_SHORT,
+        )
         .show()
   }
 }

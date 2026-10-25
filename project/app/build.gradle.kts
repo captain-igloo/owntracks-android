@@ -1,10 +1,11 @@
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 
 plugins {
-  id("com.android.application")
-  id("com.google.dagger.hilt.android")
-  kotlin("android")
-  kotlin("kapt")
+  alias(libs.plugins.android.application)
+  alias(libs.plugins.hilt.android)
+  // Kotlin is provided by AGP's built-in Kotlin support; the legacy-kapt plugin
+  // drives data binding's annotation processing (everything else is on KSP).
+  alias(libs.plugins.android.legacy.kapt)
   alias(libs.plugins.ktfmt)
   alias(libs.plugins.ksp)
   alias(libs.plugins.kotlin.plugin.serialization)
@@ -19,7 +20,7 @@ val googleMapsAPIKey =
 
 val gmsImplementation: Configuration by configurations.creating
 
-val versionNameValue = "2.5.9"
+val versionNameValue = "2.6.0"
 
 fun generateVersionCode(versionName: String): Int {
   val parts = versionName.split(".")
@@ -127,6 +128,7 @@ android {
     buildConfig = true
     dataBinding = true
     viewBinding = true
+    resValues = true
   }
 
   dataBinding { addKtx = true }
@@ -155,8 +157,24 @@ android {
     animationsDisabled = true
     unitTests { isIncludeAndroidResources = true }
     managedDevices {
-      localDevices {}
-      groups {}
+      val pixel2api27 =
+          localDevices.create("pixel2api27") {
+            device = "Pixel 2"
+            apiLevel = 27
+            systemImageSource = "aosp"
+          }
+      val pixel8api34 =
+          localDevices.create("pixel8api34") {
+            device = "Pixel 8"
+            apiLevel = 34
+            systemImageSource = "google-atd"
+          }
+      groups {
+        create("phoneAtd") {
+          targetDevices.add(pixel2api27)
+          targetDevices.add(pixel8api34)
+        }
+      }
     }
   }
 
@@ -186,8 +204,6 @@ android {
     isCoreLibraryDesugaringEnabled = true
   }
 
-  kotlinOptions { jvmTarget = JavaVersion.VERSION_21.toString() }
-
   flavorDimensions.add("locationProvider")
   productFlavors {
     create("gms") {
@@ -201,11 +217,6 @@ android {
   }
 }
 
-kapt {
-  useBuildCache = true
-  correctErrorTypes = true
-}
-
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 tasks.withType<Test> {
@@ -216,6 +227,8 @@ tasks.withType<Test> {
 }
 
 tasks.withType<JavaCompile>().configureEach { options.isFork = true }
+
+tasks.matching { it.name.endsWith("AndroidTest") }.configureEach { outputs.upToDateWhen { false } }
 
 dependencies {
   implementation(libs.bundles.kotlin)
@@ -243,28 +256,29 @@ dependencies {
   implementation(libs.kotlin.datetime)
   implementation(libs.kotlinx.serialization.json)
 
-  // The BC version shipped under com.android is half-broken. Weird certificate issues etc.
-  // To solve, we bring in our own version of BC
+  // Used directly for its lightweight XSalsa20/Poly1305 primitives (EncryptionProvider); not
+  // registered as a JCA Security provider, so only those specific classes end up in the app.
   implementation(libs.bouncycastle)
 
   // Widget libraries
   implementation(libs.widgets.materialize) { artifact { type = "aar" } }
 
   // Preprocessors
-  kapt(libs.bundles.kapt.hilt)
+  ksp(libs.bundles.ksp.hilt)
   ksp(libs.androidx.room.compiler)
 
-  kaptTest(libs.bundles.kapt.hilt)
+  kspTest(libs.bundles.ksp.hilt)
 
   testImplementation(libs.mockito.kotlin)
   testImplementation(libs.androidx.core.testing)
   testImplementation(libs.kotlin.coroutines.test)
+  testImplementation(libs.okhttp.mockwebserver)
 
   androidTestImplementation(libs.bundles.androidx.test)
 
   // Hilt Android Testing
   androidTestImplementation(libs.hilt.android.testing)
-  kaptAndroidTest(libs.hilt.compiler)
+  kspAndroidTest(libs.hilt.compiler)
 
   androidTestImplementation(libs.barista) { exclude("org.jetbrains.kotlin") }
   androidTestImplementation(libs.okhttp.mockwebserver)

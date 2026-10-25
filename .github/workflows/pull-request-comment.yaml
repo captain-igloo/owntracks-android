@@ -26,7 +26,7 @@ jobs:
       github.event.comment.author_association == 'MEMBER'
     steps:
       - name: Get PR info
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         id: get-pr-info
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +52,7 @@ jobs:
           reactions: '+1'
       - name: Create PR Check
         id: create-pr-check
-        uses: LouisBrunner/checks-action@v2.0.0
+        uses: LouisBrunner/checks-action@v3.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: PR Checkpoint Status
@@ -67,6 +67,8 @@ jobs:
     permissions:
       contents: read
       checks: write
+      pull-requests: write
+      issues: write
     uses: ./.github/workflows/build-test-lint.yaml
     with:
       ref: ${{ needs.check-comment.outputs.sha }}
@@ -112,7 +114,7 @@ jobs:
     steps:
       - name: Set status check
         id: set-status
-        uses: LouisBrunner/checks-action@v2.0.0
+        uses: LouisBrunner/checks-action@v3.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ needs.check-comment.outputs.sha }}
@@ -121,12 +123,3 @@ jobs:
           conclusion: ${{ (needs.build-test-lint.result == 'success' && (needs.espresso-test.result == 'success' || needs.espresso-test.result == 'skipped')) && 'success' || 'failure' }}
           output: |
             {"title":"Testing", "summary":"Build & Test complete", "text":"Build & Test complete"}
-      - name: Add a comment linking to the workflow
-        uses: peter-evans/create-or-update-comment@v5
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            Build & Test complete. :sparkles:
-            [View workflow run][1]
-
-            [1]: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

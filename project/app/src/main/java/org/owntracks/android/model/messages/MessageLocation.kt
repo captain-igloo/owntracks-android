@@ -5,7 +5,8 @@ import android.location.Location
 import android.os.Build
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
-import kotlinx.datetime.Instant
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -39,16 +40,21 @@ object LenientIntSerializer : JsonTransformingSerializer<Int>(Int.serializer()) 
       }
 
   fun parseIntLenient(element: JsonElement?): Int =
-      if (element == null) {
-        0
-      } else if (element is JsonPrimitive && element.doubleOrNull != null) {
-        element.doubleOrNull!!.toInt()
-      } else {
-        element.jsonPrimitive.intOrNull ?: 0
+      when (element) {
+        null -> {
+          0
+        }
+        is JsonPrimitive if element.doubleOrNull != null -> {
+          element.doubleOrNull!!.toInt()
+        }
+
+        else -> {
+          element.jsonPrimitive.intOrNull ?: 0
+        }
       }
 }
 
-@OptIn(ExperimentalSerializationApi::class)
+@OptIn(ExperimentalSerializationApi::class, ExperimentalTime::class)
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 @SerialName(MessageLocation.TYPE)
@@ -82,9 +88,15 @@ open class MessageLocation(
 
   @SerialName("vac") @Serializable(with = LenientIntSerializer::class) var verticalAccuracy = 0
 
-  @SerialName("lat") var latitude: Double = 0.0
+  // Always written out, even at their 0.0 defaults: a fix on the equator or the prime meridian is
+  // a real coordinate, and a location message without both fails validation when read back.
+  @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
+  @SerialName("lat")
+  var latitude: Double = 0.0
 
-  @SerialName("lon") var longitude: Double = 0.0
+  @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
+  @SerialName("lon")
+  var longitude: Double = 0.0
 
   @SerialName("alt") @Serializable(with = LenientIntSerializer::class) var altitude = 0
 
@@ -147,7 +159,7 @@ open class MessageLocation(
   enum class ConnectionType(val value: String) {
     WIFI("w"),
     MOBILE("m"),
-    OFFLINE("o")
+    OFFLINE("o"),
   }
 
   @Serializable(with = ReportType.ReportTypeSerializer::class)

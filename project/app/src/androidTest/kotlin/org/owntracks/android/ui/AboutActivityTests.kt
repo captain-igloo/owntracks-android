@@ -11,7 +11,7 @@ import androidx.test.filters.SmallTest
 import com.adevinta.android.barista.assertion.BaristaVisibilityAssertions.assertDisplayed
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
 import dagger.hilt.android.testing.HiltAndroidTest
-import org.hamcrest.CoreMatchers.allOf
+import org.hamcrest.Matchers.allOf
 import org.junit.Test
 import org.owntracks.android.R
 import org.owntracks.android.testutils.TestWithAnActivity
@@ -28,7 +28,8 @@ class AboutActivityTests : TestWithAnActivity<AboutActivity>() {
     val matcher =
         allOf(
             hasAction(Intent.ACTION_VIEW),
-            hasData(baristaRule.activityTestRule.activity.getString(R.string.documentationUrl)))
+            hasData(baristaRule.activityTestRule.activity.getString(R.string.documentationUrl)),
+        )
     intending(matcher).respondWith(Instrumentation.ActivityResult(RESULT_OK, null))
     clickOn(R.string.preferencesDocumentation)
     intended(matcher)
@@ -40,7 +41,8 @@ class AboutActivityTests : TestWithAnActivity<AboutActivity>() {
     val matcher =
         allOf(
             hasAction(Intent.ACTION_VIEW),
-            hasData(baristaRule.activityTestRule.activity.getString(R.string.repoUrl)))
+            hasData(baristaRule.activityTestRule.activity.getString(R.string.repoUrl)),
+        )
     intending(matcher).respondWith(Instrumentation.ActivityResult(RESULT_OK, null))
     clickOn(R.string.preferencesRepository)
     intended(matcher)
@@ -53,8 +55,9 @@ class AboutActivityTests : TestWithAnActivity<AboutActivity>() {
         allOf(
             hasAction(Intent.ACTION_VIEW),
             hasData(
-                baristaRule.activityTestRule.activity.getString(
-                    R.string.translationContributionUrl)))
+                baristaRule.activityTestRule.activity.getString(R.string.translationContributionUrl)
+            ),
+        )
     intending(matcher).respondWith(Instrumentation.ActivityResult(RESULT_OK, null))
     clickOn(R.string.aboutTranslations)
     intended(matcher)

@@ -2,9 +2,19 @@ package org.owntracks.android.testutils
 
 import android.content.Intent
 import androidx.core.net.toUri
+import androidx.preference.PreferenceManager
 import androidx.test.espresso.IdlingResource
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.platform.app.InstrumentationRegistry
 import com.adevinta.android.barista.interaction.BaristaClickInteractions.clickOn
+import io.github.davidepianca98.mqtt.broker.Broker
+import io.github.davidepianca98.mqtt.broker.interfaces.Authentication
+import io.github.davidepianca98.mqtt.broker.interfaces.PacketInterceptor
+import io.github.davidepianca98.mqtt.packets.MQTTPacket
+import io.github.davidepianca98.mqtt.packets.Qos
+import io.github.davidepianca98.mqtt.packets.mqtt.MQTTPublish
+import io.github.davidepianca98.mqtt.packets.mqttv5.MQTT5Properties
 import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -12,17 +22,12 @@ import kotlin.concurrent.thread
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.DelicateCoroutinesApi
-import mqtt.broker.Broker
-import mqtt.broker.interfaces.Authentication
-import mqtt.broker.interfaces.PacketInterceptor
-import mqtt.packets.MQTTPacket
-import mqtt.packets.Qos
-import mqtt.packets.mqtt.MQTTPublish
-import mqtt.packets.mqttv5.MQTT5Properties
 import org.owntracks.android.R
 import org.owntracks.android.model.Parser
 import org.owntracks.android.model.messages.MessageBase
+import org.owntracks.android.preferences.Preferences
 import org.owntracks.android.testutils.idlingresources.LatchingIdlingResourceWithData
+import org.owntracks.android.testutils.idlingresources.ViewIdlingResource
 import timber.log.Timber
 
 @ExperimentalUnsignedTypes
@@ -40,7 +45,8 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
   override fun MessageBase.sendFromBroker(broker: Broker, topicName: String, retain: Boolean) {
     val actualTopic = topicName + this@sendFromBroker.baseTopicSuffix
     Timber.i(
-        "Publishing ${this::class.java.simpleName} message to $actualTopic with retain=$retain")
+        "Publishing ${this::class.java.simpleName} message to $actualTopic with retain=$retain"
+    )
     this.toJsonBytes(Parser(null)).run {
       broker.publish(retain, actualTopic, Qos.AT_MOST_ONCE, MQTT5Properties(), toUByteArray()).run {
         Timber.d("MQTT Publish result to $actualTopic is $this")
@@ -89,7 +95,7 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
                 override fun authenticate(
                     clientId: String,
                     username: String?,
-                    password: UByteArray?
+                    password: UByteArray?,
                 ): Boolean {
                   return username == mqttUsername &&
                       password.contentEquals(mqttTestPassword.toByteArray().toUByteArray())
@@ -101,7 +107,7 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
                     clientId: String,
                     username: String?,
                     password: UByteArray?,
-                    packet: MQTTPacket
+                    packet: MQTTPacket,
                 ) {
                   synchronized(mqttPacketsReceived) {
                     val packetString = String(packet.toByteArray().toByteArray())
@@ -114,7 +120,8 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
                     }
                   }
                 }
-              })
+              },
+      )
 
   override fun stopBroker() {
     if (::brokerThread.isInitialized) {
@@ -152,15 +159,27 @@ class TestWithAnMQTTBrokerImpl : TestWithAnMQTTBroker {
             }
             """
                 .trimIndent()
-                .toByteArray())
+                .toByteArray()
+        )
+    PreferenceManager.getDefaultSharedPreferences(
+            InstrumentationRegistry.getInstrumentation().targetContext
+        )
+        .edit()
+        .putBoolean(Preferences::allowConfigurationByURIAndConfigFile.name, true)
+        .commit()
     InstrumentationRegistry.getInstrumentation()
         .targetContext
         .startActivity(
             Intent(Intent.ACTION_VIEW).apply {
               data = "owntracks:///config?inline=$config".toUri()
               flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            })
-    idlingResource.use { clickOn(R.id.save) }
+            }
+        )
+    // Wait for the save button to become visible before clicking.
+    // The save button is hidden until LoadActivity parses the config (ImportStatus.SUCCESS),
+    // which triggers an async invalidateOptionsMenu() → onPrepareOptionsMenu(). Without
+    // explicitly waiting for the button to be displayed, the click races against menu inflation.
+    ViewIdlingResource(withId(R.id.applyButton), isDisplayed()).use { clickOn(R.id.applyButton) }
   }
 
   // This will use the right password, so we should test for success

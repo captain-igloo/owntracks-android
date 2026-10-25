@@ -3,7 +3,8 @@ package org.owntracks.android.testutils.di
 import android.location.Location
 import android.os.Build
 import android.os.Looper
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import org.owntracks.android.location.LocationAvailability
 import org.owntracks.android.location.LocationCallback
 import org.owntracks.android.location.LocationProviderClient
@@ -31,7 +32,7 @@ class MockLocationProviderClient : LocationProviderClient() {
   override fun actuallyRequestLocationUpdates(
       locationRequest: LocationRequest,
       clientCallBack: LocationCallback,
-      looper: Looper
+      looper: Looper,
   ) {
     callbacks.add(clientCallBack)
     lastLocation?.run {
@@ -51,23 +52,26 @@ class MockLocationProviderClient : LocationProviderClient() {
   override fun getLastLocation(): Location? = lastLocation
 }
 
+@OptIn(ExperimentalTime::class)
 fun LocationProviderClient.setLocation(
     latitude: Double,
     longitude: Double,
     altitude: Double = 0.0,
     accuracy: Float = 5.0f,
-    speed: Float = 0.0f
+    speed: Float = 0.0f,
+    time: Long = Clock.System.now().toEpochMilliseconds(),
 ) {
   (this as MockLocationProviderClient).setLocation(
       Location("test").apply {
         this.latitude = latitude
         this.longitude = longitude
-        this.time = Clock.System.now().toEpochMilliseconds()
+        this.time = time
         this.altitude = altitude
         this.accuracy = accuracy
         this.speed = speed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           this.isMock = true
         }
-      })
+      }
+  )
 }
